@@ -861,7 +861,7 @@ func (env *Environment) GetDaemonSetCount(np *v1.NodePool) int {
 	return lo.CountBy(daemonSetList.Items, func(d appsv1.DaemonSet) bool {
 		p := &corev1.Pod{Spec: d.Spec.Template.Spec}
 		nodeClaimTemplate := pscheduling.NewNodeClaimTemplate(np)
-		if err := scheduling.Taints(nodeClaimTemplate.Spec.Taints).Tolerates(p); err != nil {
+		if err := scheduling.Taints(nodeClaimTemplate.Spec.Taints).ToleratesPod(p); err != nil {
 			return false
 		}
 		if err := nodeClaimTemplate.Requirements.Compatible(scheduling.NewPodRequirements(p), scheduling.AllowUndefinedWellKnownLabels); err != nil {
@@ -882,7 +882,7 @@ func (env *Environment) GetDaemonSetOverhead(np *v1.NodePool) corev1.ResourceLis
 	return resources.RequestsForPods(lo.FilterMap(daemonSetList.Items, func(ds appsv1.DaemonSet, _ int) (*corev1.Pod, bool) {
 		p := &corev1.Pod{Spec: ds.Spec.Template.Spec}
 		nodeClaimTemplate := pscheduling.NewNodeClaimTemplate(np)
-		if err := scheduling.Taints(nodeClaimTemplate.Spec.Taints).Tolerates(p); err != nil {
+		if err := scheduling.Taints(nodeClaimTemplate.Spec.Taints).ToleratesPod(p); err != nil {
 			return nil, false
 		}
 		if err := nodeClaimTemplate.Requirements.Compatible(scheduling.NewPodRequirements(p), scheduling.AllowUndefinedWellKnownLabels); err != nil {

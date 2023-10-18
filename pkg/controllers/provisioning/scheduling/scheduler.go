@@ -303,7 +303,7 @@ func (s *Scheduler) calculateExistingNodeClaims(stateNodes []*state.StateNode, d
 		// Calculate any daemonsets that should schedule to the inflight node
 		var daemons []*corev1.Pod
 		for _, p := range daemonSetPods {
-			if err := scheduling.Taints(node.Taints()).Tolerates(p); err != nil {
+			if err := scheduling.Taints(node.Taints()).ToleratesPod(p); err != nil {
 				continue
 			}
 			if err := scheduling.NewLabelRequirements(node.Labels()).Compatible(scheduling.NewPodRequirements(p)); err != nil {
@@ -340,7 +340,7 @@ func getDaemonOverhead(nodeClaimTemplates []*NodeClaimTemplate, daemonSetPods []
 	for _, nodeClaimTemplate := range nodeClaimTemplates {
 		var daemons []*corev1.Pod
 		for _, p := range daemonSetPods {
-			if err := scheduling.Taints(nodeClaimTemplate.Spec.Taints).Tolerates(p); err != nil {
+			if err := scheduling.Taints(nodeClaimTemplate.Spec.Taints).ToleratesPod(p); err != nil {
 				continue
 			}
 			if err := nodeClaimTemplate.Requirements.Compatible(scheduling.NewPodRequirements(p), scheduling.AllowUndefinedWellKnownLabels); err != nil {
