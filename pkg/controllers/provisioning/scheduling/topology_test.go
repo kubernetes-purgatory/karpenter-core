@@ -17,6 +17,7 @@ limitations under the License.
 package scheduling_test
 
 import (
+	"fmt"
 	"time"
 
 	. "github.com/onsi/gomega"
@@ -1132,7 +1133,7 @@ var _ = Describe("Topology", func() {
 				Skip("NodeTaintsPolicy ony enabled by default for K8s >= 1.26.x")
 			}
 
-			const spreadLabel = "karpenter.sh/fake-label"
+			const spreadLabel = "fake-label"
 			nodePool.Spec.Template.Labels = map[string]string{
 				spreadLabel: "baz",
 			}
@@ -1206,7 +1207,7 @@ var _ = Describe("Topology", func() {
 			if env.Version.Minor() < 26 {
 				Skip("NodeTaintsPolicy ony enabled by default for K8s >= 1.26.x")
 			}
-			const spreadLabel = "karpenter.sh/fake-label"
+			const spreadLabel = "fake-label"
 			nodePool.Spec.Template.Labels = map[string]string{
 				spreadLabel: "baz",
 			}
@@ -1275,23 +1276,24 @@ var _ = Describe("Topology", func() {
 			// and should schedule all of the pods on the same node
 			ExpectSkew(ctx, env.Client, "default", &topology[0]).To(ConsistOf(5))
 		})
-		FIt("should balance pods across a label when discovered from the provisioner (NodeTaintsPolicy=honor)", func() {
-			if env.Version.Minor() < 26 {
-				Skip("NodeTaintsPolicy ony enabled by default for K8s >= 1.26.x")
-			}
-			const spreadLabel = "karpenter.sh/fake-label"
-			nodePool.Spec.Template.Labels = map[string]string{
-				spreadLabel: "baz",
-			}
-
-			nodePoolTainted := test.NodePool(v1.NodePool{
+		It("should balance pods across a label when discovered from the provisioner (NodeTaintsPolicy=ignore)", func() {
+			const spreadLabel = "fake-label"
+			const taintKey = "taint-key"
+			nodePool.Spec.Template.Spec.Requirements = append(nodePool.Spec.Template.Spec.Requirements, v1.NodeSelectorRequirementWithMinValues{
+				NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      spreadLabel,
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{"foo"},
+				},
+			})
+			taintedNodePool := test.NodePool(v1.NodePool{
 				Spec: v1.NodePoolSpec{
 					Template: v1.NodeClaimTemplate{
 						Spec: v1.NodeClaimTemplateSpec{
 							Taints: []corev1.Taint{
 								{
-									Key:    "taintname",
-									Value:  "taintvalue",
+									Key:    taintKey,
+									Value:  "taint-value",
 									Effect: corev1.TaintEffectNoSchedule,
 								},
 							},
@@ -1306,7 +1308,7 @@ var _ = Describe("Topology", func() {
 									NodeSelectorRequirement: corev1.NodeSelectorRequirement{
 										Key:      spreadLabel,
 										Operator: corev1.NodeSelectorOpIn,
-										Values:   []string{"foo", "bar"},
+										Values:   []string{"bar"},
 									},
 								},
 							},
@@ -1315,9 +1317,73 @@ var _ = Describe("Topology", func() {
 				},
 			})
 
-			ExpectApplied(ctx, env.Client, nodePool, nodePoolTainted)
+			honor := corev1.NodeInclusionPolicyIgnore
+			topology := []corev1.TopologySpreadConstraint{{
+				TopologyKey:       spreadLabel,
+				WhenUnsatisfiable: corev1.DoNotSchedule,
+				LabelSelector:     &metav1.LabelSelector{MatchLabels: labels},
+				MaxSkew:           1,
+				NodeTaintsPolicy:  &honor,
+			}}
 
-			ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov)
+			pods := test.UnschedulablePods(test.PodOptions{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				TopologySpreadConstraints: topology,
+			}, 2)
+
+			ExpectApplied(ctx, env.Client, nodePool, taintedNodePool)
+			ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov, pods...)
+
+			// should fail to schedule both pods, one pod is scheduled to domain "foo" but the other can't be scheduled to domain "bar"
+			ExpectSkew(ctx, env.Client, "default", &topology[0]).To(ConsistOf(1))
+		})
+		It("should balance pods across a label when discovered from the provisioner (NodeTaintsPolicy=honor)", func() {
+			if env.Version.Minor() < 26 {
+				Skip("NodeTaintsPolicy ony enabled by default for K8s >= 1.26.x")
+			}
+
+			const spreadLabel = "fake-label"
+			const taintKey = "taint-key"
+			nodePool.Spec.Template.Spec.Requirements = append(nodePool.Spec.Template.Spec.Requirements, v1.NodeSelectorRequirementWithMinValues{
+				NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      spreadLabel,
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{"foo"},
+				},
+			})
+			taintedNodePool := test.NodePool(v1.NodePool{
+				Spec: v1.NodePoolSpec{
+					Template: v1.NodeClaimTemplate{
+						Spec: v1.NodeClaimTemplateSpec{
+							Taints: []corev1.Taint{
+								{
+									Key:    taintKey,
+									Value:  "taint-value",
+									Effect: corev1.TaintEffectNoSchedule,
+								},
+							},
+							Requirements: []v1.NodeSelectorRequirementWithMinValues{
+								{
+									NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+										Key:      v1.CapacityTypeLabelKey,
+										Operator: corev1.NodeSelectorOpExists,
+									},
+								},
+								{
+									NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+										Key:      spreadLabel,
+										Operator: corev1.NodeSelectorOpIn,
+										Values:   []string{"bar"},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+
 			honor := corev1.NodeInclusionPolicyHonor
 			topology := []corev1.TopologySpreadConstraint{{
 				TopologyKey:       spreadLabel,
@@ -1327,20 +1393,84 @@ var _ = Describe("Topology", func() {
 				NodeTaintsPolicy:  &honor,
 			}}
 
-			ExpectApplied(ctx, env.Client, nodePool)
-			ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov,
-				test.UnschedulablePods(test.PodOptions{
-					ObjectMeta: metav1.ObjectMeta{Labels: labels},
-					ResourceRequirements: corev1.ResourceRequirements{
-						Requests: corev1.ResourceList{
-							corev1.ResourceCPU: resource.MustParse("1"),
+			pods := test.UnschedulablePods(test.PodOptions{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				TopologySpreadConstraints: topology,
+			}, 2)
+
+			ExpectApplied(ctx, env.Client, nodePool, taintedNodePool)
+			ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov, pods...)
+
+			// should schedule all pods to domain "foo", ignoring bar since pods don't tolerate
+			ExpectSkew(ctx, env.Client, "default", &topology[0]).To(ConsistOf(2))
+		})
+		It("should balance pods across a label when mutually exclusive NodePools (by taints) share domains (NodeTaintsPolicy=honor)", func() {
+			const spreadLabel = "fake-label"
+			const taintKey = "taint-key"
+
+			nodePools := lo.Map([][]string{{"foo", "bar"}, {"foo", "baz"}}, func(domains []string, i int) *v1.NodePool {
+				return test.NodePool(v1.NodePool{
+					Spec: v1.NodePoolSpec{
+						Template: v1.NodeClaimTemplate{
+							Spec: v1.NodeClaimTemplateSpec{
+								Taints: []corev1.Taint{
+									{
+										Key:    taintKey,
+										Value:  fmt.Sprintf("nodepool-%d", i),
+										Effect: corev1.TaintEffectNoSchedule,
+									},
+								},
+								Requirements: []v1.NodeSelectorRequirementWithMinValues{
+									{
+										NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+											Key:      v1.CapacityTypeLabelKey,
+											Operator: corev1.NodeSelectorOpExists,
+										},
+									},
+									{
+										NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+											Key:      spreadLabel,
+											Operator: corev1.NodeSelectorOpIn,
+											Values:   domains,
+										},
+									},
+								},
+							},
 						},
 					},
+				})
+			})
+
+			honor := corev1.NodeInclusionPolicyHonor
+			topology := []corev1.TopologySpreadConstraint{{
+				TopologyKey:       spreadLabel,
+				WhenUnsatisfiable: corev1.DoNotSchedule,
+				LabelSelector:     &metav1.LabelSelector{MatchLabels: labels},
+				MaxSkew:           1,
+				NodeTaintsPolicy:  &honor,
+			}}
+
+			pods := lo.Flatten(lo.Map(nodePools, func(np *v1.NodePool, _ int) []*corev1.Pod {
+				return test.UnschedulablePods(test.PodOptions{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: labels,
+					},
 					TopologySpreadConstraints: topology,
-				}, 5)...,
-			)
-			// and should schedule all of the pods on the same node
-			ExpectSkew(ctx, env.Client, "default", &topology[0]).To(ConsistOf(5))
+					Tolerations: []corev1.Toleration{{
+						Key:    taintKey,
+						Effect: corev1.TaintEffectNoSchedule,
+						Value:  np.Spec.Template.Spec.Taints[0].Value,
+					}},
+				}, 2)
+			}))
+
+			ExpectApplied(ctx, env.Client, nodePools[0], nodePools[1])
+			ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov, pods...)
+
+			// Expect 3 total nodes provisioned, 2 pods schedule to foo, 1 to bar, and 1 to baz
+			ExpectSkew(ctx, env.Client, "default", &topology[0]).To(ConsistOf(1, 2, 1))
 		})
 	})
 
@@ -1349,8 +1479,8 @@ var _ = Describe("Topology", func() {
 			if env.Version.Minor() < 26 {
 				Skip("NodeAffinityPolicy ony enabled by default for K8s >= 1.26.x")
 			}
-			const spreadLabel = "karpenter.sh/fake-label"
-			const affinityLabel = "karpenter.sh/selector"
+			const spreadLabel = "fake-label"
+			const affinityLabel = "selector"
 			const affinityMismatch = "mismatch"
 			const affinityMatch = "value"
 
@@ -1420,8 +1550,8 @@ var _ = Describe("Topology", func() {
 			if env.Version.Minor() < 26 {
 				Skip("NodeAffinityPolicy ony enabled by default for K8s >= 1.26.x")
 			}
-			const spreadLabel = "karpenter.sh/fake-label"
-			const affinityLabel = "karpenter.sh/selector"
+			const spreadLabel = "fake-label"
+			const affinityLabel = "selector"
 			const affinityMismatch = "mismatch"
 			const affinityMatch = "value"
 

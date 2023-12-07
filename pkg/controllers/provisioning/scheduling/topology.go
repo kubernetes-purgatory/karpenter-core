@@ -52,18 +52,18 @@ type Topology struct {
 	// in some cases.
 	inverseTopologies map[uint64]*TopologyGroup
 	// The universe of domains by topology key
-	domains map[string]sets.Set[string]
+	domainGroups map[string]TopologyDomainGroup
 	// excludedPods are the pod UIDs of pods that are excluded from counting.  This is used so we can simulate
 	// moving pods to prevent them from being double counted.
 	excludedPods sets.Set[string]
 	cluster      *state.Cluster
 }
 
-func NewTopology(ctx context.Context, kubeClient client.Client, cluster *state.Cluster, domains map[string]sets.Set[string], pods []*corev1.Pod) (*Topology, error) {
+func NewTopology(ctx context.Context, kubeClient client.Client, cluster *state.Cluster, domainGroups map[string]TopologyDomainGroup, pods []*corev1.Pod) (*Topology, error) {
 	t := &Topology{
 		kubeClient:        kubeClient,
 		cluster:           cluster,
-		domains:           domains,
+		domainGroups:      domainGroups,
 		topologies:        map[uint64]*TopologyGroup{},
 		inverseTopologies: map[uint64]*TopologyGroup{},
 		excludedPods:      sets.New[string](),
@@ -233,7 +233,7 @@ func (t *Topology) updateInverseAntiAffinity(ctx context.Context, pod *corev1.Po
 			return err
 		}
 
-		tg := NewTopologyGroup(TopologyTypePodAntiAffinity, term.TopologyKey, pod, namespaces, term.LabelSelector, math.MaxInt32, nil, nil, nil, t.domains[term.TopologyKey])
+		tg := NewTopologyGroup(TopologyTypePodAntiAffinity, term.TopologyKey, pod, namespaces, term.LabelSelector, math.MaxInt32, nil, nil, nil, t.domainGroups[term.TopologyKey])
 
 		hash := tg.Hash()
 		if existing, ok := t.inverseTopologies[hash]; !ok {
@@ -269,6 +269,10 @@ func (t *Topology) countDomains(ctx context.Context, tg *TopologyGroup) error {
 	// capture new domain values from existing nodes that may not have any pods selected by the topology group
 	// scheduled to them already
 	t.cluster.ForEachNode(func(n *state.StateNode) bool {
+		// ignore state nodes which are tracking in-flight NodeClaims
+		if n.Node == nil {
+			return true
+		}
 		// ignore the node if it doesn't match the topology group
 		if !tg.nodeFilter.Matches(n.Node) {
 			return true
@@ -330,7 +334,7 @@ func (t *Topology) newForTopologies(p *corev1.Pod) []*TopologyGroup {
 	var topologyGroups []*TopologyGroup
 	for _, cs := range p.Spec.TopologySpreadConstraints {
 		topologyGroups = append(topologyGroups, NewTopologyGroup(TopologyTypeSpread, cs.TopologyKey, p, sets.New(p.Namespace),
-			cs.LabelSelector, cs.MaxSkew, cs.MinDomains, cs.NodeTaintsPolicy, cs.NodeAffinityPolicy, t.domains[cs.TopologyKey]))
+			cs.LabelSelector, cs.MaxSkew, cs.MinDomains, cs.NodeTaintsPolicy, cs.NodeAffinityPolicy, t.domainGroups[cs.TopologyKey]))
 	}
 	return topologyGroups
 }
@@ -367,7 +371,7 @@ func (t *Topology) newForAffinities(ctx context.Context, p *corev1.Pod) ([]*Topo
 			if err != nil {
 				return nil, err
 			}
-			topologyGroups = append(topologyGroups, NewTopologyGroup(topologyType, term.TopologyKey, p, namespaces, term.LabelSelector, math.MaxInt32, nil, nil, nil, t.domains[term.TopologyKey]))
+			topologyGroups = append(topologyGroups, NewTopologyGroup(topologyType, term.TopologyKey, p, namespaces, term.LabelSelector, math.MaxInt32, nil, nil, nil, t.domainGroups[term.TopologyKey]))
 		}
 	}
 	return topologyGroups, nil
