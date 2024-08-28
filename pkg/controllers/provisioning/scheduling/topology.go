@@ -333,9 +333,13 @@ func (t *Topology) countDomains(ctx context.Context, tg *TopologyGroup) error {
 func (t *Topology) newForTopologies(p *corev1.Pod) []*TopologyGroup {
 	var topologyGroups []*TopologyGroup
 	for _, cs := range p.Spec.TopologySpreadConstraints {
-		for _, label := range cs.MatchLabelKeys {
-			if value, ok := p.ObjectMeta.Labels[label]; ok {
-				cs.LabelSelector.MatchLabels[label] = value
+		for _, key := range cs.MatchLabelKeys {
+			if value, ok := p.ObjectMeta.Labels[key]; ok {
+				cs.LabelSelector.MatchExpressions = append(cs.LabelSelector.MatchExpressions, metav1.LabelSelectorRequirement{
+					Key:      key,
+					Operator: metav1.LabelSelectorOpIn,
+					Values:   []string{value},
+				})
 			}
 		}
 		topologyGroups = append(topologyGroups, NewTopologyGroup(TopologyTypeSpread, cs.TopologyKey, p, sets.New(p.Namespace),
