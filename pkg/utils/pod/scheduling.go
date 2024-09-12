@@ -180,9 +180,14 @@ func HasDoNotDisrupt(pod *corev1.Pod) bool {
 	return pod.Annotations[v1.DoNotDisruptAnnotationKey] == "true"
 }
 
-// ToleratesDisruptedNoScheduleTaint returns true if the pod tolerates karpenter.sh/disrupted:NoSchedule taint
+// ToleratesUnschedulableTaint returns true if the pod tolerates node.kubernetes.io/unschedulable taint
+func ToleratesUnschedulableTaint(pod *corev1.Pod) bool {
+	return (scheduling.Taints{{Key: corev1.TaintNodeUnschedulable, Effect: corev1.TaintEffectNoSchedule}}).ToleratesPod(pod) == nil
+}
+
+// ToleratesDisruptionNoScheduleTaint returns true if the pod tolerates karpenter.sh/disruption:NoSchedule=Disrupting taint
 func ToleratesDisruptedNoScheduleTaint(pod *corev1.Pod) bool {
-	return scheduling.Taints([]corev1.Taint{v1.DisruptedNoScheduleTaint}).Tolerates(pod) == nil
+	return scheduling.Taints([]corev1.Taint{v1.DisruptedNoScheduleTaint}).ToleratesPod(pod) == nil
 }
 
 // HasRequiredPodAntiAffinity returns true if a non-empty PodAntiAffinity/RequiredDuringSchedulingIgnoredDuringExecution

@@ -33,7 +33,6 @@ import (
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/clock"
 	fakecr "sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -167,7 +166,7 @@ func benchmarkScheduler(b *testing.B, instanceCount, podCount int) {
 	client := fakecr.NewFakeClient()
 	pods := makeDiversePods(podCount)
 	cluster = state.NewCluster(&clock.RealClock{}, client)
-	domains := map[string]sets.Set[string]{}
+	domains := map[string]scheduling.TopologyDomainGroup{}
 	topology, err := scheduling.NewTopology(ctx, client, cluster, domains, pods)
 	if err != nil {
 		b.Fatalf("creating topology, %s", err)

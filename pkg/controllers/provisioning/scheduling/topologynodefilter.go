@@ -28,23 +28,36 @@ import (
 // included for topology counting purposes. This is only used with topology spread constraints as affinities/anti-affinities
 // always count across all nodes. A nil or zero-value TopologyNodeFilter behaves well and the filter returns true for
 // all nodes.
-type TopologyNodeFilter []scheduling.Requirements
+type TopologyNodeFilter struct {
+	Requirements   []scheduling.Requirements
+	TaintPolicy    v1.NodeInclusionPolicy
+	AffinityPolicy v1.NodeInclusionPolicy
+	Tolerations    []v1.Toleration
+}
 
-func MakeTopologyNodeFilter(p *v1.Pod) TopologyNodeFilter {
+func MakeTopologyNodeFilter(p *v1.Pod, taintPolicy v1.NodeInclusionPolicy, affinityPolicy v1.NodeInclusionPolicy) TopologyNodeFilter {
 	nodeSelectorRequirements := scheduling.NewLabelRequirements(p.Spec.NodeSelector)
 	// if we only have a label selector, that's the only requirement that must match
 	if p.Spec.Affinity == nil || p.Spec.Affinity.NodeAffinity == nil || p.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
-		return TopologyNodeFilter{nodeSelectorRequirements}
+		return TopologyNodeFilter{
+			Requirements:   []scheduling.Requirements{nodeSelectorRequirements},
+			TaintPolicy:    taintPolicy,
+			AffinityPolicy: affinityPolicy,
+			Tolerations:    p.Spec.Tolerations,
+		}
 	}
 
 	// otherwise, we need to match the combination of label selector and any term of the required node affinities since
 	// those terms are OR'd together
-	var filter TopologyNodeFilter
+	filter := TopologyNodeFilter{
+		TaintPolicy:    taintPolicy,
+		AffinityPolicy: affinityPolicy,
+	}
 	for _, term := range p.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
 		requirements := scheduling.NewRequirements()
 		requirements.Add(nodeSelectorRequirements.Values()...)
 		requirements.Add(scheduling.NewNodeSelectorRequirements(term.MatchExpressions...).Values()...)
-		filter = append(filter, requirements)
+		filter.Requirements = append(filter.Requirements, requirements)
 	}
 
 	return filter
@@ -52,7 +65,17 @@ func MakeTopologyNodeFilter(p *v1.Pod) TopologyNodeFilter {
 
 // Matches returns true if the TopologyNodeFilter doesn't prohibit node from the participating in the topology
 func (t TopologyNodeFilter) Matches(node *v1.Node) bool {
-	return t.MatchesRequirements(scheduling.NewLabelRequirements(node.Labels))
+	matchesAffinity := true
+	if t.AffinityPolicy == v1.NodeInclusionPolicyHonor {
+		matchesAffinity = t.MatchesRequirements(scheduling.NewLabelRequirements(node.Labels))
+	}
+	matchesTaints := true
+	if t.TaintPolicy == v1.NodeInclusionPolicyHonor {
+		if err := scheduling.Taints(node.Spec.Taints).Tolerates(t.Tolerations); err != nil {
+			matchesTaints = false
+		}
+	}
+	return matchesAffinity && matchesTaints
 }
 
 // MatchesRequirements returns true if the TopologyNodeFilter doesn't prohibit a node with the requirements from
@@ -60,11 +83,11 @@ func (t TopologyNodeFilter) Matches(node *v1.Node) bool {
 // node we will soon create participates in this topology.
 func (t TopologyNodeFilter) MatchesRequirements(requirements scheduling.Requirements, compatabilityOptions ...option.Function[scheduling.CompatibilityOptions]) bool {
 	// no requirements, so it always matches
-	if len(t) == 0 {
+	if len(t.Requirements) == 0 || t.AffinityPolicy == v1.NodeInclusionPolicyIgnore {
 		return true
 	}
 	// these are an OR, so if any passes the filter passes
-	for _, req := range t {
+	for _, req := range t.Requirements {
 		if err := requirements.Compatible(req, compatabilityOptions...); err == nil {
 			return true
 		}
