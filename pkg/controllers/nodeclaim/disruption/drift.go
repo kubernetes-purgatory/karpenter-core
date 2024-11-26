@@ -44,12 +44,13 @@ type Drift struct {
 }
 
 func (d *Drift) Reconcile(ctx context.Context, nodePool *v1.NodePool, nodeClaim *v1.NodeClaim) (reconcile.Result, error) {
-	hasDriftedCondition := nodeClaim.StatusConditions().Get(v1.ConditionTypeDrifted) != nil
+	hasDriftedCondition := nodeClaim.StatusConditions().IsTrue(v1.ConditionTypeDrifted)
 
+	// Prefer to set the Drifted condition to false instead of clearing for the printer column output.
 	// From here there are three scenarios to handle:
-	// 1. If NodeClaim is not launched, remove the drift status condition
+	// 1. If NodeClaim is not launched, set the drift status condition false
 	if !nodeClaim.StatusConditions().Get(v1.ConditionTypeLaunched).IsTrue() {
-		_ = nodeClaim.StatusConditions().Clear(v1.ConditionTypeDrifted)
+		_ = nodeClaim.StatusConditions().SetFalse(v1.ConditionTypeDrifted, v1.ConditionTypeDrifted, "")
 		if hasDriftedCondition {
 			log.FromContext(ctx).V(1).Info("removing drift status condition, isn't launched")
 		}
@@ -59,10 +60,10 @@ func (d *Drift) Reconcile(ctx context.Context, nodePool *v1.NodePool, nodeClaim 
 	if err != nil {
 		return reconcile.Result{}, cloudprovider.IgnoreNodeClaimNotFoundError(fmt.Errorf("getting drift, %w", err))
 	}
-	// 2. Otherwise, if the NodeClaim isn't drifted, but has the status condition, remove it.
+	// 2. Otherwise, if the NodeClaim isn't drifted, but has the status condition, unset it
 	if driftedReason == "" {
+		_ = nodeClaim.StatusConditions().SetFalse(v1.ConditionTypeDrifted, v1.ConditionTypeDrifted, "")
 		if hasDriftedCondition {
-			_ = nodeClaim.StatusConditions().Clear(v1.ConditionTypeDrifted)
 			log.FromContext(ctx).V(1).Info("removing drifted status condition, not drifted")
 		}
 		return reconcile.Result{RequeueAfter: 5 * time.Minute}, nil
