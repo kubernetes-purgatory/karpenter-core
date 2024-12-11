@@ -532,6 +532,7 @@ var _ = Describe("Termination", func() {
 		It("should not delete nodes until all pods are deleted", func() {
 			pods := test.Pods(2, test.PodOptions{NodeName: node.Name, ObjectMeta: metav1.ObjectMeta{OwnerReferences: defaultOwnerRefs}})
 			ExpectApplied(ctx, env.Client, node, nodeClaim, pods[0], pods[1])
+			Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeDrained).IsUnknown()).To(BeTrue())
 
 			// Trigger Termination Controller
 			Expect(env.Client.Delete(ctx, node)).To(Succeed())
@@ -539,6 +540,10 @@ var _ = Describe("Termination", func() {
 			ExpectObjectReconciled(ctx, env.Client, terminationController, node)
 			ExpectSingletonReconciled(ctx, queue)
 			ExpectSingletonReconciled(ctx, queue)
+
+			nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+			Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeDrained).IsFalse()).To(BeTrue())
+			Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeDrained).Reason).To(Equal("Draining"))
 
 			// Expect the pods to be evicted
 			EventuallyExpectTerminating(ctx, env.Client, pods[0], pods[1])
@@ -563,6 +568,8 @@ var _ = Describe("Termination", func() {
 			ExpectObjectReconciled(ctx, env.Client, terminationController, node)
 			ExpectObjectReconciled(ctx, env.Client, terminationController, node)
 			ExpectNotFound(ctx, env.Client, node)
+			nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+			Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeDrained).IsTrue()).To(BeTrue())
 		})
 		It("should delete nodes with no underlying instance even if not fully drained", func() {
 			pods := test.Pods(2, test.PodOptions{NodeName: node.Name, ObjectMeta: metav1.ObjectMeta{OwnerReferences: defaultOwnerRefs}})
@@ -769,15 +776,23 @@ var _ = Describe("Termination", func() {
 				})
 				ExpectApplied(ctx, env.Client, node, nodeClaim, nodePool, va)
 				Expect(env.Client.Delete(ctx, node)).To(Succeed())
+				ExpectExists(ctx, env.Client, nodeClaim)
+				Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeVolumesDetached).IsUnknown()).To(BeTrue())
 
 				ExpectObjectReconciled(ctx, env.Client, terminationController, node)
 				ExpectObjectReconciled(ctx, env.Client, terminationController, node)
 				ExpectExists(ctx, env.Client, node)
+				nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+				Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeVolumesDetached).IsFalse()).To(BeTrue())
+				Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeVolumesDetached).Reason).To(Equal("AwaitingVolumeDetachment"))
 
 				ExpectDeleted(ctx, env.Client, va)
 				ExpectObjectReconciled(ctx, env.Client, terminationController, node)
 				ExpectObjectReconciled(ctx, env.Client, terminationController, node)
 				ExpectNotFound(ctx, env.Client, node)
+
+				nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+				Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeVolumesDetached).IsTrue()).To(BeTrue())
 			})
 			It("should only wait for volume attachments associated with drainable pods", func() {
 				vaDrainable := test.VolumeAttachment(test.VolumeAttachmentOptions{
@@ -882,7 +897,7 @@ var _ = Describe("Termination", func() {
 				// Don't let any pod evict
 				MinAvailable: &minAvailable,
 			})
-			ExpectApplied(ctx, env.Client, pdb, node)
+			ExpectApplied(ctx, env.Client, pdb, node, nodeClaim)
 			pods := test.Pods(5, test.PodOptions{NodeName: node.Name, ObjectMeta: metav1.ObjectMeta{
 				OwnerReferences: defaultOwnerRefs,
 				Labels:          labelSelector,
