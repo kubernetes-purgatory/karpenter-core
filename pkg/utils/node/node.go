@@ -18,7 +18,6 @@ package node
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/awslabs/operatorpkg/object"
@@ -27,63 +26,17 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
+	"sigs.k8s.io/karpenter/pkg/operator"
 	nodeclaimutils "sigs.k8s.io/karpenter/pkg/utils/nodeclaim"
 	"sigs.k8s.io/karpenter/pkg/utils/pod"
 )
-
-// NodeClaimNotFoundError is an error returned when no v1.NodeClaims are found matching the passed providerID
-type NodeClaimNotFoundError struct {
-	ProviderID string
-}
-
-func (e *NodeClaimNotFoundError) Error() string {
-	return fmt.Sprintf("no nodeclaims found for provider id '%s'", e.ProviderID)
-}
-
-func IsNodeClaimNotFoundError(err error) bool {
-	if err == nil {
-		return false
-	}
-	nnfErr := &NodeClaimNotFoundError{}
-	return errors.As(err, &nnfErr)
-}
-
-func IgnoreNodeClaimNotFoundError(err error) error {
-	if !IsNodeClaimNotFoundError(err) {
-		return err
-	}
-	return nil
-}
-
-// DuplicateNodeClaimError is an error returned when multiple v1.NodeClaims are found matching the passed providerID
-type DuplicateNodeClaimError struct {
-	ProviderID string
-}
-
-func (e *DuplicateNodeClaimError) Error() string {
-	return fmt.Sprintf("multiple found for provider id '%s'", e.ProviderID)
-}
-
-func IsDuplicateNodeClaimError(err error) bool {
-	if err == nil {
-		return false
-	}
-	dnErr := &DuplicateNodeClaimError{}
-	return errors.As(err, &dnErr)
-}
-
-func IgnoreDuplicateNodeClaimError(err error) error {
-	if !IsDuplicateNodeClaimError(err) {
-		return err
-	}
-	return nil
-}
 
 // GetPods grabs all pods that are currently bound to the passed nodes
 func GetPods(ctx context.Context, kubeClient client.Client, nodes ...*corev1.Node) ([]*corev1.Pod, error) {
@@ -181,8 +134,11 @@ func IsManagedPredicateFuncs(cp cloudprovider.CloudProvider) predicate.Funcs {
 	})
 }
 
-func NodeClaimEventHandler(c client.Client) handler.EventHandler {
+func NodeClaimEventHandler(c client.Client, cloudProvider cloudprovider.CloudProvider) handler.EventHandler {
 	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
+		if !nodeclaimutils.IsManaged(o.(*v1.NodeClaim), cloudProvider) {
+			return nil
+		}
 		providerID := o.(*v1.NodeClaim).Status.ProviderID
 		if providerID == "" {
 			return nil
@@ -195,4 +151,19 @@ func NodeClaimEventHandler(c client.Client) handler.EventHandler {
 			return reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&n)}
 		})
 	})
+}
+
+func IsHydrated(n *corev1.Node) bool {
+	version, ok := n.Annotations[v1.HydrationAnnotationKey]
+	if !ok {
+		return false
+	}
+	return version == operator.Version
+}
+
+func ContainsFinalizer(n *corev1.Node, finalizer string) (bool, error) {
+	if v1.HydratedFinailzers.Has(finalizer) && !IsHydrated(n) {
+		return false, &HydrationError{}
+	}
+	return controllerutil.ContainsFinalizer(n, finalizer), nil
 }

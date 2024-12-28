@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
+	"sigs.k8s.io/karpenter/pkg/operator"
 )
 
 type NodeOptions struct {
@@ -52,6 +53,10 @@ func Node(overrides ...NodeOptions) *corev1.Node {
 	if options.Capacity == nil {
 		options.Capacity = options.Allocatable
 	}
+
+	options.Annotations = lo.Assign(map[string]string{
+		v1.HydrationAnnotationKey: operator.Version,
+	}, options.Annotations)
 
 	return &corev1.Node{
 		ObjectMeta: ObjectMeta(options.ObjectMeta),

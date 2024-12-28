@@ -40,8 +40,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	terminatorevents "sigs.k8s.io/karpenter/pkg/controllers/node/termination/terminator/events"
-
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 	"sigs.k8s.io/karpenter/pkg/events"
@@ -279,7 +277,6 @@ func (c *Controller) annotateTerminationGracePeriodTerminationTime(ctx context.C
 		return client.IgnoreNotFound(err)
 	}
 	log.FromContext(ctx).WithValues(v1.NodeClaimTerminationTimestampAnnotationKey, terminationTime).Info("annotated nodeclaim")
-	c.recorder.Publish(terminatorevents.NodeClaimTerminationGracePeriodExpiring(nodeClaim, terminationTime))
-
+	c.recorder.Publish(NodeClaimTerminationGracePeriodExpiringEvent(nodeClaim, terminationTime))
 	return nil
 }

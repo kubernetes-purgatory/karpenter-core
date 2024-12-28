@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package terminator
+package drain
 
 import (
 	opmetrics "github.com/awslabs/operatorpkg/metrics"
@@ -24,18 +24,15 @@ import (
 	"sigs.k8s.io/karpenter/pkg/metrics"
 )
 
-const (
-	// CodeLabel for eviction request
-	CodeLabel = "code"
-)
-
-var NodesEvictionRequestsTotal = opmetrics.NewPrometheusCounter(
-	crmetrics.Registry,
-	prometheus.CounterOpts{
-		Namespace: metrics.Namespace,
-		Subsystem: metrics.NodeSubsystem,
-		Name:      "eviction_requests_total",
-		Help:      "The total number of eviction requests made by Karpenter",
-	},
-	[]string{CodeLabel},
+var (
+	NodesDrainedTotal = opmetrics.NewPrometheusCounter(
+		crmetrics.Registry,
+		prometheus.CounterOpts{
+			Namespace: metrics.Namespace,
+			Subsystem: metrics.NodeSubsystem,
+			Name:      "drained_total",
+			Help:      "The total number of nodes drained by Karpenter",
+		},
+		[]string{metrics.NodePoolLabel},
+	)
 )

@@ -44,3 +44,13 @@ func NodeClassNotReadyEvent(nodeClaim *v1.NodeClaim, err error) events.Event {
 		DedupeValues:   []string{string(nodeClaim.UID)},
 	}
 }
+
+func NodeClaimTerminationGracePeriodExpiringEvent(nodeClaim *v1.NodeClaim, terminationTime string) events.Event {
+	return events.Event{
+		InvolvedObject: nodeClaim,
+		Type:           corev1.EventTypeWarning,
+		Reason:         "TerminationGracePeriodExpiring",
+		Message:        fmt.Sprintf("All pods will be deleted by %s", terminationTime),
+		DedupeValues:   []string{nodeClaim.Name},
+	}
+}

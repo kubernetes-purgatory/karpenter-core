@@ -34,7 +34,7 @@ import (
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider/fake"
 	"sigs.k8s.io/karpenter/pkg/controllers/node/health"
-	"sigs.k8s.io/karpenter/pkg/controllers/node/termination/terminator"
+	"sigs.k8s.io/karpenter/pkg/controllers/node/termination/eviction"
 	"sigs.k8s.io/karpenter/pkg/metrics"
 	"sigs.k8s.io/karpenter/pkg/test"
 	. "sigs.k8s.io/karpenter/pkg/test/expectations"
@@ -49,7 +49,7 @@ var env *test.Environment
 var fakeClock *clock.FakeClock
 var cloudProvider *fake.CloudProvider
 var recorder *test.EventRecorder
-var queue *terminator.Queue
+var queue *eviction.Queue
 
 func TestAPIs(t *testing.T) {
 	ctx = TestContextWithLogger(t)
@@ -67,7 +67,7 @@ var _ = BeforeSuite(func() {
 	cloudProvider = fake.NewCloudProvider()
 	cloudProvider = fake.NewCloudProvider()
 	recorder = test.NewEventRecorder()
-	queue = terminator.NewTestingQueue(env.Client, recorder)
+	queue = eviction.NewTestingQueue(env.Client, recorder)
 	healthController = health.NewController(env.Client, cloudProvider, fakeClock, recorder)
 })
 

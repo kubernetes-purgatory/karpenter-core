@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package terminator
+package eviction
 
 import (
 	"context"
@@ -40,7 +40,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	terminatorevents "sigs.k8s.io/karpenter/pkg/controllers/node/termination/terminator/events"
 	"sigs.k8s.io/karpenter/pkg/events"
 	"sigs.k8s.io/karpenter/pkg/operator/injection"
 )
@@ -49,22 +48,6 @@ const (
 	evictionQueueBaseDelay = 100 * time.Millisecond
 	evictionQueueMaxDelay  = 10 * time.Second
 )
-
-type NodeDrainError struct {
-	error
-}
-
-func NewNodeDrainError(err error) *NodeDrainError {
-	return &NodeDrainError{error: err}
-}
-
-func IsNodeDrainError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var nodeDrainErr *NodeDrainError
-	return errors.As(err, &nodeDrainErr)
-}
 
 type QueueKey struct {
 	types.NamespacedName
@@ -195,16 +178,16 @@ func (q *Queue) Evict(ctx context.Context, key QueueKey) bool {
 			return true
 		}
 		if apierrors.IsTooManyRequests(err) { // 429 - PDB violation
-			q.recorder.Publish(terminatorevents.NodeFailedToDrain(&corev1.Node{ObjectMeta: metav1.ObjectMeta{
+			q.recorder.Publish(PodEvictionFailedEvent(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 				Name:      key.Name,
 				Namespace: key.Namespace,
-			}}, fmt.Errorf("evicting pod %s/%s violates a PDB", key.Namespace, key.Name)))
+			}}, fmt.Sprintf("evicting pod %s/%s violated a PDB", key.Namespace, key.Name)))
 			return false
 		}
 		log.FromContext(ctx).Error(err, "failed evicting pod")
 		return false
 	}
 	NodesEvictionRequestsTotal.Inc(map[string]string{CodeLabel: "200"})
-	q.recorder.Publish(terminatorevents.EvictPod(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}))
+	q.recorder.Publish(PodEvictedEvent(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}))
 	return true
 }

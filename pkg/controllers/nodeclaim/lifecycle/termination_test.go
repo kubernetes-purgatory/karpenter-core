@@ -300,7 +300,7 @@ var _ = Describe("Termination", func() {
 		ExpectExists(ctx, env.Client, node)
 		nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
 
-		Expect(nodeClaim.ObjectMeta.Annotations).To(BeNil())
+		Expect(lo.Keys(nodeClaim.ObjectMeta.Annotations)).ToNot(ContainElement(v1.NodeClaimTerminationTimestampAnnotationKey))
 	})
 	It("should annotate the node if the NodeClaim has a terminationGracePeriod", func() {
 		nodeClaim.Spec.TerminationGracePeriod = &metav1.Duration{Duration: time.Second * 300}

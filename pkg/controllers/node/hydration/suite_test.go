@@ -24,10 +24,15 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
 	"sigs.k8s.io/karpenter/pkg/apis"
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider/fake"
 	"sigs.k8s.io/karpenter/pkg/controllers/node/hydration"
+	"sigs.k8s.io/karpenter/pkg/operator"
 	"sigs.k8s.io/karpenter/pkg/operator/options"
 	"sigs.k8s.io/karpenter/pkg/test"
 	. "sigs.k8s.io/karpenter/pkg/test/expectations"
@@ -64,36 +69,64 @@ var _ = AfterEach(func() {
 })
 
 var _ = Describe("Hydration", func() {
+	var nodeClaim *v1.NodeClaim
+	var node *corev1.Node
+
+	BeforeEach(func() {
+		nodeClaim, node = test.NodeClaimAndNode(v1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Annotations: map[string]string{v1.HydrationAnnotationKey: "not-hydrated"},
+			},
+		})
+	})
+
+	It("should hydrate the NodeClass label", func() {
+		delete(node.Labels, v1.NodeClassLabelKey(nodeClaim.Spec.NodeClassRef.GroupKind()))
+		ExpectApplied(ctx, env.Client, nodeClaim, node)
+		ExpectObjectReconciled(ctx, env.Client, hydrationController, node)
+		node = ExpectExists(ctx, env.Client, node)
+		value := node.Labels[v1.NodeClassLabelKey(nodeClaim.Spec.NodeClassRef.GroupKind())]
+		Expect(value).To(Equal(nodeClaim.Spec.NodeClassRef.Name))
+	})
 	DescribeTable(
-		"Hydration",
-		func(isNodeClaimManaged bool) {
-			nodeClassRef := lo.Ternary(isNodeClaimManaged, &v1.NodeClassReference{
-				Group: "karpenter.test.sh",
-				Kind:  "TestNodeClass",
-				Name:  "default",
-			}, &v1.NodeClassReference{
-				Group: "karpenter.test.sh",
-				Kind:  "UnmanagedNodeClass",
-				Name:  "default",
-			})
-			nodeClaim, node := test.NodeClaimAndNode(v1.NodeClaim{
-				Spec: v1.NodeClaimSpec{
-					NodeClassRef: nodeClassRef,
-				},
-			})
-			delete(node.Labels, v1.NodeClassLabelKey(nodeClassRef.GroupKind()))
+		"Finalizers",
+		func(nodeClaimConditions []string, expectedFinailzers []string) {
+			for _, cond := range nodeClaimConditions {
+				nodeClaim.StatusConditions().SetTrue(cond)
+			}
 			ExpectApplied(ctx, env.Client, nodeClaim, node)
 			ExpectObjectReconciled(ctx, env.Client, hydrationController, node)
-
-			// The missing NodeClass label should have been propagated to the Node
 			node = ExpectExists(ctx, env.Client, node)
-			value, ok := node.Labels[v1.NodeClassLabelKey(nodeClassRef.GroupKind())]
-			Expect(ok).To(Equal(isNodeClaimManaged))
-			if isNodeClaimManaged {
-				Expect(value).To(Equal(nodeClassRef.Name))
+			Expect(len(node.Finalizers)).To(Equal(len(expectedFinailzers)))
+			for _, finalizer := range expectedFinailzers {
+				Expect(controllerutil.ContainsFinalizer(node, finalizer))
 			}
 		},
-		Entry("should hydrate missing metadata onto the Node", true),
-		Entry("should ignore Nodes which aren't managed by this Karpenter instance", false),
+		Entry("should hydrate all finalizers when none of the requisite status conditions are true", nil, []string{v1.DrainFinalizer, v1.VolumeFinalizer}),
+		Entry("should hydrate the volume finalizer when only the drain status condition is true", []string{v1.ConditionTypeDrained}, []string{v1.VolumeFinalizer}),
+		Entry("should hydrate the drain finalizer when only the volume status condition is true", []string{v1.ConditionTypeVolumesDetached}, []string{v1.VolumeFinalizer}),
+		Entry("shouldn't hydrate finalizers when all requisite conditions are true", []string{v1.ConditionTypeDrained, v1.ConditionTypeVolumesDetached}, nil),
 	)
+	It("shouldn't hydrate nodes which have already been hydrated", func() {
+		node.Annotations[v1.HydrationAnnotationKey] = operator.Version
+		delete(node.Labels, v1.NodeClassLabelKey(nodeClaim.Spec.NodeClassRef.GroupKind()))
+		ExpectApplied(ctx, env.Client, nodeClaim, node)
+		ExpectObjectReconciled(ctx, env.Client, hydrationController, node)
+		node = ExpectExists(ctx, env.Client, node)
+		Expect(lo.Keys(node.Labels)).ToNot(ContainElement(v1.NodeClassLabelKey(nodeClaim.Spec.NodeClassRef.GroupKind())))
+		Expect(len(node.Finalizers)).To(Equal(0))
+	})
+	It("shouldn't hydrate nodes which are not managed by this instance of Karpenter", func() {
+		nodeClaim.Spec.NodeClassRef = &v1.NodeClassReference{
+			Group: "karpenter.test.sh",
+			Kind:  "UnmanagedNodeClass",
+			Name:  "default",
+		}
+		delete(node.Labels, v1.NodeClassLabelKey(nodeClaim.Spec.NodeClassRef.GroupKind()))
+		ExpectApplied(ctx, env.Client, nodeClaim, node)
+		ExpectObjectReconciled(ctx, env.Client, hydrationController, node)
+		node = ExpectExists(ctx, env.Client, node)
+		Expect(lo.Keys(node.Labels)).ToNot(ContainElement(v1.NodeClassLabelKey(nodeClaim.Spec.NodeClassRef.GroupKind())))
+		Expect(len(node.Finalizers)).To(Equal(0))
+	})
 })

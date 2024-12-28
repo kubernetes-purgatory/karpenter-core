@@ -26,6 +26,7 @@ import (
 	"k8s.io/klog/v2"
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -35,6 +36,7 @@ import (
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
+	"sigs.k8s.io/karpenter/pkg/operator"
 	"sigs.k8s.io/karpenter/pkg/operator/injection"
 	nodeutils "sigs.k8s.io/karpenter/pkg/utils/node"
 	nodeclaimutils "sigs.k8s.io/karpenter/pkg/utils/nodeclaim"
@@ -54,9 +56,32 @@ func NewController(kubeClient client.Client, cloudProvider cloudprovider.CloudPr
 	}
 }
 
+func (c *Controller) Name() string {
+	return "node.hydration"
+}
+
+func (c *Controller) Register(_ context.Context, m manager.Manager) error {
+	return controllerruntime.NewControllerManagedBy(m).
+		Named(c.Name()).
+		For(&corev1.Node{}).
+		Watches(&v1.NodeClaim{}, nodeutils.NodeClaimEventHandler(c.kubeClient, c.cloudProvider)).
+		WithOptions(controller.Options{
+			RateLimiter:             reasonable.RateLimiter(),
+			MaxConcurrentReconciles: 1000,
+		}).
+		Complete(reconcile.AsReconciler(m.GetClient(), c))
+}
+
 func (c *Controller) Reconcile(ctx context.Context, n *corev1.Node) (reconcile.Result, error) {
 	ctx = injection.WithControllerName(ctx, c.Name())
 	ctx = log.IntoContext(ctx, log.FromContext(ctx).WithValues("Node", klog.KRef(n.Namespace, n.Name)))
+
+	if nodeutils.IsHydrated(n) {
+		return reconcile.Result{}, nil
+	}
+	n.Annotations = lo.Assign(n.Annotations, map[string]string{
+		v1.HydrationAnnotationKey: operator.Version,
+	})
 
 	nc, err := nodeutils.NodeClaimForNode(ctx, c.kubeClient, n)
 	if err != nil {
@@ -70,29 +95,27 @@ func (c *Controller) Reconcile(ctx context.Context, n *corev1.Node) (reconcile.R
 	}
 
 	stored := n.DeepCopy()
-	n.Labels = lo.Assign(n.Labels, map[string]string{
-		v1.NodeClassLabelKey(nc.Spec.NodeClassRef.GroupKind()): nc.Spec.NodeClassRef.Name,
-	})
+	c.hydrateNodeClassLabel(n, nc)
+	c.hydrateFinalizers(n, nc)
 	if !equality.Semantic.DeepEqual(stored, n) {
-		if err := c.kubeClient.Patch(ctx, n, client.MergeFrom(stored)); err != nil {
+		if err := c.kubeClient.Patch(ctx, n, client.StrategicMergeFrom(stored)); err != nil {
 			return reconcile.Result{}, client.IgnoreNotFound(err)
 		}
 	}
 	return reconcile.Result{}, nil
 }
 
-func (c *Controller) Name() string {
-	return "node.hydration"
+func (c *Controller) hydrateNodeClassLabel(n *corev1.Node, nc *v1.NodeClaim) {
+	n.Labels = lo.Assign(n.Labels, map[string]string{
+		v1.NodeClassLabelKey(nc.Spec.NodeClassRef.GroupKind()): nc.Spec.NodeClassRef.Name,
+	})
 }
 
-func (c *Controller) Register(_ context.Context, m manager.Manager) error {
-	return controllerruntime.NewControllerManagedBy(m).
-		Named(c.Name()).
-		For(&corev1.Node{}).
-		Watches(&v1.NodeClaim{}, nodeutils.NodeClaimEventHandler(c.kubeClient)).
-		WithOptions(controller.Options{
-			RateLimiter:             reasonable.RateLimiter(),
-			MaxConcurrentReconciles: 1000,
-		}).
-		Complete(reconcile.AsReconciler(m.GetClient(), c))
+func (c *Controller) hydrateFinalizers(n *corev1.Node, nc *v1.NodeClaim) {
+	if !nc.StatusConditions().Get(v1.ConditionTypeDrained).IsTrue() {
+		controllerutil.AddFinalizer(n, v1.DrainFinalizer)
+	}
+	if !nc.StatusConditions().Get(v1.ConditionTypeVolumesDetached).IsTrue() {
+		controllerutil.AddFinalizer(n, v1.VolumeFinalizer)
+	}
 }

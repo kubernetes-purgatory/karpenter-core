@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package termination
+package instancetermination
 
 import (
 	"time"
@@ -37,16 +37,6 @@ var (
 			Name:       "termination_duration_seconds",
 			Help:       "The time taken between a node's deletion request and the removal of its finalizer",
 			Objectives: metrics.SummaryObjectives(),
-		},
-		[]string{metrics.NodePoolLabel},
-	)
-	NodesDrainedTotal = opmetrics.NewPrometheusCounter(
-		crmetrics.Registry,
-		prometheus.CounterOpts{
-			Namespace: metrics.Namespace,
-			Subsystem: metrics.NodeSubsystem,
-			Name:      "drained_total",
-			Help:      "The total number of nodes drained by Karpenter",
 		},
 		[]string{metrics.NodePoolLabel},
 	)

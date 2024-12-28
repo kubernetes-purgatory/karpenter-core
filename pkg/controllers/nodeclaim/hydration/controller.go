@@ -34,6 +34,7 @@ import (
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
+	"sigs.k8s.io/karpenter/pkg/operator"
 	"sigs.k8s.io/karpenter/pkg/operator/injection"
 	nodeclaimutils "sigs.k8s.io/karpenter/pkg/utils/nodeclaim"
 )
@@ -52,25 +53,6 @@ func NewController(kubeClient client.Client, cloudProvider cloudprovider.CloudPr
 	}
 }
 
-func (c *Controller) Reconcile(ctx context.Context, nc *v1.NodeClaim) (reconcile.Result, error) {
-	ctx = injection.WithControllerName(ctx, c.Name())
-	ctx = log.IntoContext(ctx, log.FromContext(ctx).WithValues("NodeClaim", klog.KRef(nc.Namespace, nc.Name)))
-	if !nodeclaimutils.IsManaged(nc, c.cloudProvider) {
-		return reconcile.Result{}, nil
-	}
-
-	stored := nc.DeepCopy()
-	nc.Labels = lo.Assign(nc.Labels, map[string]string{
-		v1.NodeClassLabelKey(nc.Spec.NodeClassRef.GroupKind()): nc.Spec.NodeClassRef.Name,
-	})
-	if !equality.Semantic.DeepEqual(stored, nc) {
-		if err := c.kubeClient.Patch(ctx, nc, client.MergeFrom(stored)); err != nil {
-			return reconcile.Result{}, client.IgnoreNotFound(err)
-		}
-	}
-	return reconcile.Result{}, nil
-}
-
 func (c *Controller) Name() string {
 	return "nodeclaim.hydration"
 }
@@ -84,4 +66,35 @@ func (c *Controller) Register(_ context.Context, m manager.Manager) error {
 			MaxConcurrentReconciles: 1000,
 		}).
 		Complete(reconcile.AsReconciler(m.GetClient(), c))
+}
+
+func (c *Controller) Reconcile(ctx context.Context, nc *v1.NodeClaim) (reconcile.Result, error) {
+	ctx = injection.WithControllerName(ctx, c.Name())
+	ctx = log.IntoContext(ctx, log.FromContext(ctx).WithValues("NodeClaim", klog.KRef(nc.Namespace, nc.Name)))
+
+	if !nodeclaimutils.IsManaged(nc, c.cloudProvider) {
+		return reconcile.Result{}, nil
+	}
+
+	if version := nc.Annotations[v1.HydrationAnnotationKey]; version == operator.Version {
+		return reconcile.Result{}, nil
+	}
+	nc.Annotations = lo.Assign(nc.Annotations, map[string]string{
+		v1.HydrationAnnotationKey: operator.Version,
+	})
+
+	stored := nc.DeepCopy()
+	c.hydrateNodeClassLabel(nc)
+	if !equality.Semantic.DeepEqual(stored, nc) {
+		if err := c.kubeClient.Patch(ctx, nc, client.MergeFromWithOptions(stored, client.MergeFromWithOptimisticLock{})); err != nil {
+			return reconcile.Result{}, client.IgnoreNotFound(err)
+		}
+	}
+	return reconcile.Result{}, nil
+}
+
+func (c *Controller) hydrateNodeClassLabel(nc *v1.NodeClaim) {
+	nc.Labels = lo.Assign(nc.Labels, map[string]string{
+		v1.NodeClassLabelKey(nc.Spec.NodeClassRef.GroupKind()): nc.Spec.NodeClassRef.Name,
+	})
 }

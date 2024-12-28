@@ -50,11 +50,14 @@ const (
 	NodePoolHashAnnotationKey                  = apis.Group + "/nodepool-hash"
 	NodePoolHashVersionAnnotationKey           = apis.Group + "/nodepool-hash-version"
 	NodeClaimTerminationTimestampAnnotationKey = apis.Group + "/nodeclaim-termination-timestamp"
+	HydrationAnnotationKey                     = apis.Group + "/hydrated-by"
 )
 
 // Karpenter specific finalizers
 const (
 	TerminationFinalizer = apis.Group + "/termination"
+	DrainFinalizer       = apis.Group + "/drain-protection"
+	VolumeFinalizer      = apis.Group + "/volume-protection"
 )
 
 var (
@@ -102,6 +105,13 @@ var (
 		v1.LabelInstanceType:            v1.LabelInstanceTypeStable,
 		v1.LabelFailureDomainBetaRegion: v1.LabelTopologyRegion,
 	}
+
+	// HydratedFinailzers contains the finalizers which must be applied to a resource by the hydration contrller. If
+	// the resource is not hydrated, Karpenter can not depend on the lack of one of these finalizers as a signal.
+	HydratedFinailzers = sets.New(
+		DrainFinalizer,
+		VolumeFinalizer,
+	)
 )
 
 // IsRestrictedLabel returns an error if the label is restricted.

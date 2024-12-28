@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
+	"sigs.k8s.io/karpenter/pkg/operator"
 )
 
 // NodeClaim creates a test NodeClaim with defaults that can be overridden by overrides.
@@ -49,6 +50,9 @@ func NodeClaim(overrides ...v1.NodeClaim) *v1.NodeClaim {
 			Name:  "default",
 		}
 	}
+	override.Annotations = lo.Assign(map[string]string{
+		v1.HydrationAnnotationKey: operator.Version,
+	}, override.Annotations)
 	override.Labels = lo.Assign(map[string]string{
 		v1.NodeClassLabelKey(override.Spec.NodeClassRef.GroupKind()): override.Spec.NodeClassRef.Name,
 	}, override.Labels)
