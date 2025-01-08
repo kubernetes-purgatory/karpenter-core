@@ -18,6 +18,7 @@ package scheduling
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"fmt"
 	"sort"
@@ -273,11 +274,10 @@ func (s *Scheduler) add(ctx context.Context, pod *corev1.Pod) error {
 		}
 	}
 
-	// Consider using https://pkg.go.dev/container/heap
-	sort.Slice(s.newNodeClaims, func(a, b int) bool { return len(s.newNodeClaims[a].Pods) < len(s.newNodeClaims[b].Pods) })
-
-	// Pick existing node that we are about to create
-	for _, nodeClaim := range s.newNodeClaims {
+	h := NewNodeClaimHeap(s.newNodeClaims)
+	heap.Init(h)
+	for h.Len() > 0 {
+		nodeClaim := heap.Pop(h).(*NodeClaim)
 		if err := nodeClaim.Add(pod, s.cachedPodRequests[pod.UID]); err == nil {
 			return nil
 		}

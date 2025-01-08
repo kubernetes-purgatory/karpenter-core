@@ -85,6 +85,10 @@ require (
 	sigs.k8s.io/yaml v1.4.0 // indirect
 )
 
+require github.com/stretchr/testify v1.9.0
+
+require github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+
 retract (
 	v0.100.101-test // accidentally published testing version
 	v0.35.3 // accidentally published incomplete patch release
