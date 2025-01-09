@@ -18,6 +18,7 @@ package lifecycle
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -28,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"sigs.k8s.io/karpenter/pkg/apis"
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 	"sigs.k8s.io/karpenter/pkg/events"
@@ -127,7 +129,14 @@ func PopulateNodeClaimDetails(nodeClaim, retrieved *v1.NodeClaim) *v1.NodeClaim 
 		scheduling.NewNodeSelectorRequirementsWithMinValues(nodeClaim.Spec.Requirements...).Labels(), // Single-value requirement resolved labels
 		nodeClaim.Labels, // User-defined labels
 	)
-	nodeClaim.Annotations = lo.Assign(nodeClaim.Annotations, retrieved.Annotations)
+
+	kubeletLabels := scheduling.NewNodeSelectorRequirementsWithMinValues(nodeClaim.Spec.Requirements...).KubeletLabels()
+	json, err := json.Marshal(kubeletLabels)
+	if err != nil {
+		panic(err)
+	}
+	kubeletLabelsAnnotation := map[string]string{apis.Group + "/node-restricted-labels": string(json)}
+	nodeClaim.Annotations = lo.Assign(nodeClaim.Annotations, retrieved.Annotations, kubeletLabelsAnnotation)
 	nodeClaim.Status.ProviderID = retrieved.Status.ProviderID
 	nodeClaim.Status.ImageID = retrieved.Status.ImageID
 	nodeClaim.Status.Allocatable = retrieved.Status.Allocatable
