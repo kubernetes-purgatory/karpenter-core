@@ -384,7 +384,12 @@ func (p *Provisioner) Create(ctx context.Context, n *scheduler.NodeClaim, opts .
 	// requeue. This can race with controller-runtime's internal cache as it watches events on the cluster
 	// to then trigger cluster state updates. Triggering it manually ensures that Karpenter waits for the
 	// internal cache to sync before moving onto another disruption loop.
-	p.cluster.UpdateNodeClaim(nodeClaim)
+	// Note: the only way UpdateNodeClaim can return an error is if the passed NodeClaim has been launched, which is
+	// not possible in this case.
+	lo.Must0(p.cluster.UpdateNodeClaim(nodeClaim))
+	if err := p.cluster.AddNodeClaimReservations(nodeClaim, n.Reservations); err != nil {
+		log.FromContext(ctx).WithValues("NodeClaim", klog.KRef("", nodeClaim.Name)).Error(err, "encountered error tracking offering availability")
+	}
 	if option.Resolve(opts...).RecordPodNomination {
 		for _, pod := range n.Pods {
 			p.recorder.Publish(scheduler.NominatePodEvent(pod, nil, nodeClaim))

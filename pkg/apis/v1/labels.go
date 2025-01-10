@@ -33,6 +33,7 @@ const (
 	ArchitectureArm64    = "arm64"
 	CapacityTypeSpot     = "spot"
 	CapacityTypeOnDemand = "on-demand"
+	CapacityTypeReserved = "reserved"
 )
 
 // Karpenter specific domains and labels

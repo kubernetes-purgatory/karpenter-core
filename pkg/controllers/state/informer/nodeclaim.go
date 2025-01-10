@@ -18,12 +18,15 @@ package informer
 
 import (
 	"context"
+	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/klog/v2"
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -64,7 +67,12 @@ func (c *NodeClaimController) Reconcile(ctx context.Context, req reconcile.Reque
 	if !nodeclaimutils.IsManaged(nodeClaim, c.cloudProvider) {
 		return reconcile.Result{}, nil
 	}
-	c.cluster.UpdateNodeClaim(nodeClaim)
+	if err := c.cluster.UpdateNodeClaim(nodeClaim); err != nil {
+		if !state.IsMultipleMatchingReservationsError(err) && !state.IsMatchingReservationNotFoundError(err) {
+			return reconcile.Result{}, fmt.Errorf("tracking nodeclaim in cluster state", err)
+		}
+		log.FromContext(ctx).WithValues("NodeClaim", klog.KRef(nodeClaim.Namespace, nodeClaim.Name)).Error(err, "encountered error tracking offering availability")
+	}
 	// ensure it's aware of any nodes we discover, this is a no-op if the node is already known to our cluster state
 	return reconcile.Result{RequeueAfter: stateRetryPeriod}, nil
 }

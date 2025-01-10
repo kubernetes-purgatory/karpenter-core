@@ -98,8 +98,8 @@ func constructGenericInstanceTypes() []kwok.InstanceTypeOptions {
 									corev1.NodeSelectorRequirement{Key: corev1.LabelTopologyZone, Operator: corev1.NodeSelectorOpIn, Values: []string{zone}},
 								},
 								Offering: cloudprovider.Offering{
-									Price:     lo.Ternary(ct == v1.CapacityTypeSpot, price*.7, price),
-									Available: true,
+									OfferingAvailabilityResolver: cloudprovider.TrueStaticAvailabilityResolver,
+									Price:                        lo.Ternary(ct == v1.CapacityTypeSpot, price*.7, price),
 								},
 							})
 						}

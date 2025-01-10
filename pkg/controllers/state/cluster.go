@@ -18,6 +18,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -28,7 +29,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -44,17 +45,46 @@ import (
 	podutils "sigs.k8s.io/karpenter/pkg/utils/pod"
 )
 
+type MultipleMatchingReservationsError struct{}
+
+func (e MultipleMatchingReservationsError) Error() string {
+	return fmt.Sprintf("found multiple matching offering reservations for nodeclaim")
+}
+
+func IsMultipleMatchingReservationsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	e := MultipleMatchingReservationsError{}
+	return errors.As(err, &e)
+}
+
+type MatchingReservationNotFoundError struct{}
+
+func (e MatchingReservationNotFoundError) Error() string {
+	return fmt.Sprintf("didn't find matching offering reservation for nodeclaim")
+}
+
+func IsMatchingReservationNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	e := MatchingReservationNotFoundError{}
+	return errors.As(err, &e)
+}
+
 // Cluster maintains cluster state that is often needed but expensive to compute.
 type Cluster struct {
 	kubeClient                client.Client
 	cloudProvider             cloudprovider.CloudProvider
 	clock                     clock.Clock
 	mu                        sync.RWMutex
-	nodes                     map[string]*StateNode           // provider id -> cached node
-	bindings                  map[types.NamespacedName]string // pod namespaced named -> node name
-	nodeNameToProviderID      map[string]string               // node name -> provider id
-	nodeClaimNameToProviderID map[string]string               // node claim name -> provider id
-	daemonSetPods             sync.Map                        // daemonSet -> existing pod
+	nodes                     map[string]*StateNode                         // provider id -> cached node
+	bindings                  map[types.NamespacedName]string               // pod namespaced named -> node name
+	nodeNameToProviderID      map[string]string                             // node name -> provider id
+	nodeClaimNameToProviderID map[string]string                             // node claim name -> provider id
+	daemonSetPods             sync.Map                                      // daemonSet -> existing pod
+	reservations              map[string]cloudprovider.OfferingReservations // node claim name -> reservations
 
 	podAcks                 sync.Map // pod namespaced name -> time when Karpenter first saw the pod as pending
 	podsSchedulingAttempted sync.Map // pod namespaced name -> time when Karpenter tried to schedule a pod
@@ -244,7 +274,23 @@ func (c *Cluster) MarkForDeletion(providerIDs ...string) {
 	}
 }
 
-func (c *Cluster) UpdateNodeClaim(nodeClaim *v1.NodeClaim) {
+func (c *Cluster) AddNodeClaimReservations(nodeClaim *v1.NodeClaim, reservations cloudprovider.OfferingReservations) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// If the NodeClaim launched before the reservations were added to cluster state, commit here and discard the
+	// reservations. Otherwise, save the reservations for future use.
+	if providerID := c.nodeClaimNameToProviderID[nodeClaim.Name]; providerID != "" {
+		if err := commitToNodeClaimReservation(c.nodes[providerID].NodeClaim, reservations); err != nil {
+			return err
+		}
+		return nil
+	}
+	c.reservations[nodeClaim.Name] = reservations
+	return nil
+}
+
+func (c *Cluster) UpdateNodeClaim(nodeClaim *v1.NodeClaim) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -254,11 +300,36 @@ func (c *Cluster) UpdateNodeClaim(nodeClaim *v1.NodeClaim) {
 	if nodeClaim.Status.ProviderID != "" {
 		n := c.newStateFromNodeClaim(nodeClaim, c.nodes[nodeClaim.Status.ProviderID])
 		c.nodes[nodeClaim.Status.ProviderID] = n
+
+		reservations, ok := c.reservations[nodeClaim.Name]
+		if !ok {
+			return nil
+		}
+		// Regardless of the commit error, we will not reuse these reservations. These can be removed now rather than
+		// during NodeClaim termination.
+		delete(c.reservations, nodeClaim.Name)
+		if err := commitToNodeClaimReservation(nodeClaim, reservations); err != nil {
+			return err
+		}
+		return nil
 	}
 	// If the nodeclaim hasn't launched yet, we want to add it into cluster state to ensure
 	// that we're not racing with the internal cache for the cluster, assuming the node doesn't exist.
 	c.nodeClaimNameToProviderID[nodeClaim.Name] = nodeClaim.Status.ProviderID
 	ClusterStateNodesCount.Set(float64(len(c.nodes)), nil)
+	return nil
+}
+
+func commitToNodeClaimReservation(nodeClaim *v1.NodeClaim, reservations cloudprovider.OfferingReservations) error {
+	matchingReservations := reservations.Matching(nodeClaim)
+	if len(matchingReservations) > 1 {
+		return MultipleMatchingReservationsError{}
+	}
+	if len(matchingReservations) == 0 {
+		return MatchingReservationNotFoundError{}
+	}
+	matchingReservations.Commit()
+	return nil
 }
 
 func (c *Cluster) DeleteNodeClaim(name string) {
@@ -601,7 +672,7 @@ func (c *Cluster) updateNodeUsageFromPod(ctx context.Context, pod *corev1.Pod) e
 	n, ok := c.nodes[c.nodeNameToProviderID[pod.Spec.NodeName]]
 	if !ok {
 		// the node must exist for us to update the resource requests on the node
-		return errors.NewNotFound(schema.GroupResource{Resource: "Node"}, pod.Spec.NodeName)
+		return apierrors.NewNotFound(schema.GroupResource{Resource: "Node"}, pod.Spec.NodeName)
 	}
 	if err := n.updateForPod(ctx, c.kubeClient, pod); err != nil {
 		return err

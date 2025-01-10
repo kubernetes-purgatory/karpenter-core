@@ -2138,12 +2138,12 @@ func AddInstanceResources(instanceTypes []*cloudprovider.InstanceType, resources
 	price := fake.PriceFromResources(opts.Resources)
 	opts.Offerings = []cloudprovider.Offering{
 		{
+			OfferingAvailabilityResolver: cloudprovider.TrueStaticAvailabilityResolver,
 			Requirements: scheduling.NewLabelRequirements(map[string]string{
 				v1.CapacityTypeLabelKey:  v1.CapacityTypeSpot,
 				corev1.LabelTopologyZone: "test-zone-1",
 			}),
 			Price:     price,
-			Available: true,
 		},
 	}
 

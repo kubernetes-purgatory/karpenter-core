@@ -189,14 +189,22 @@ func (r Results) TruncateInstanceTypes(maxInstanceTypes int) Results {
 	for _, newNodeClaim := range r.NewNodeClaims {
 		// The InstanceTypeOptions are truncated due to limitations in sending the number of instances to launch API.
 		var err error
-		newNodeClaim.InstanceTypeOptions, err = newNodeClaim.InstanceTypeOptions.Truncate(newNodeClaim.Requirements, maxInstanceTypes)
+		truncatedInstanceTypes, err := newNodeClaim.InstanceTypeOptions.Truncate(newNodeClaim.Requirements, maxInstanceTypes)
 		if err != nil {
 			// Check if the truncated InstanceTypeOptions in each NewNodeClaim from the results still satisfy the minimum requirements
 			// If number of InstanceTypes in the NodeClaim cannot satisfy the minimum requirements, add its Pods to error map with reason.
 			for _, pod := range newNodeClaim.Pods {
 				r.PodErrors[pod] = fmt.Errorf("pod didn’t schedule because NodePool %q couldn’t meet minValues requirements, %w", newNodeClaim.NodeClaimTemplate.NodePoolName, err)
 			}
+			// If we can't create the NodeClaim, all reservations should be released
+			for _, it := range newNodeClaim.InstanceTypeOptions {
+				it.Offerings.Reservations(newNodeClaim.hostname).Release()
+			}
 		} else {
+			for _, it := range newNodeClaim.InstanceTypeOptions.Difference(truncatedInstanceTypes) {
+				it.Offerings.Reservations(newNodeClaim.hostname).Release()
+			}
+			newNodeClaim.InstanceTypeOptions = truncatedInstanceTypes
 			validNewNodeClaims = append(validNewNodeClaims, newNodeClaim)
 		}
 	}
@@ -285,27 +293,40 @@ func (s *Scheduler) add(ctx context.Context, pod *corev1.Pod) error {
 	// Create new node
 	var errs error
 	for _, nodeClaimTemplate := range s.nodeClaimTemplates {
-		instanceTypes := nodeClaimTemplate.InstanceTypeOptions
-		// if limits have been applied to the nodepool, ensure we filter instance types to avoid violating those limits
-		if remaining, ok := s.remainingResources[nodeClaimTemplate.NodePoolName]; ok {
-			instanceTypes = filterByRemainingResources(instanceTypes, remaining)
-			if len(instanceTypes) == 0 {
-				errs = multierr.Append(errs, fmt.Errorf("all available instance types exceed limits for nodepool: %q", nodeClaimTemplate.NodePoolName))
-				continue
-			} else if len(nodeClaimTemplate.InstanceTypeOptions) != len(instanceTypes) {
-				log.FromContext(ctx).V(1).WithValues("NodePool", klog.KRef("", nodeClaimTemplate.NodePoolName)).Info(fmt.Sprintf("%d out of %d instance types were excluded because they would breach limits",
-					len(nodeClaimTemplate.InstanceTypeOptions)-len(instanceTypes), len(nodeClaimTemplate.InstanceTypeOptions)))
-			}
-		}
-		nodeClaim := NewNodeClaim(nodeClaimTemplate, s.topology, s.daemonOverhead[nodeClaimTemplate], instanceTypes)
-		if err := nodeClaim.Add(pod, s.cachedPodRequests[pod.UID]); err != nil {
-			nodeClaim.Destroy() // Ensure we cleanup any changes that we made while mocking out a NodeClaim
-			errs = multierr.Append(errs, fmt.Errorf("incompatible with nodepool %q, daemonset overhead=%s, %w",
-				nodeClaimTemplate.NodePoolName,
-				resources.String(s.daemonOverhead[nodeClaimTemplate]),
-				err))
+		// instanceTypes := nodeClaimTemplate.InstanceTypeOptions
+		// // if limits have been applied to the nodepool, ensure we filter instance types to avoid violating those limits
+		// if remaining, ok := s.remainingResources[nodeClaimTemplate.NodePoolName]; ok {
+		// 	instanceTypes = filterByRemainingResources(instanceTypes, remaining)
+		// 	if len(instanceTypes) == 0 {
+		// 		errs = multierr.Append(errs, fmt.Errorf("all available instance types exceed limits for nodepool: %q", nodeClaimTemplate.NodePoolName))
+		// 		continue
+		// 	} else if len(nodeClaimTemplate.InstanceTypeOptions) != len(instanceTypes) {
+		// 		log.FromContext(ctx).V(1).WithValues("NodePool", klog.KRef("", nodeClaimTemplate.NodePoolName)).Info(fmt.Sprintf("%d out of %d instance types were excluded because they would breach limits",
+		// 			len(nodeClaimTemplate.InstanceTypeOptions)-len(instanceTypes), len(nodeClaimTemplate.InstanceTypeOptions)))
+		// 	}
+		// }
+		nodeClaim, err := NewNodeClaimForPod(
+			ctx,
+			nodeClaimTemplate,
+			s.topology,
+			s.daemonOverhead[nodeClaimTemplate],
+			s.remainingResources[nodeClaimTemplate.NodePoolName],
+			pod,
+			s.cachedPodRequests[pod.UID],
+		)
+		if err != nil {
+			nodeClaim.Destroy()
+			errs = multierr.Append(errs, err)
 			continue
 		}
+		// if err := nodeClaim.Add(pod, s.cachedPodRequests[pod.UID]); err != nil {
+		// 	nodeClaim.Destroy() // Ensure we cleanup any changes that we made while mocking out a NodeClaim
+		// 	errs = multierr.Append(errs, fmt.Errorf("incompatible with nodepool %q, daemonset overhead=%s, %w",
+		// 		nodeClaimTemplate.NodePoolName,
+		// 		resources.String(s.daemonOverhead[nodeClaimTemplate]),
+		// 		err))
+		// 	continue
+		// }
 		// we will launch this nodeClaim and need to track its maximum possible resource usage against our remaining resources
 		s.newNodeClaims = append(s.newNodeClaims, nodeClaim)
 		s.remainingResources[nodeClaimTemplate.NodePoolName] = subtractMax(s.remainingResources[nodeClaimTemplate.NodePoolName], nodeClaim.InstanceTypeOptions)
