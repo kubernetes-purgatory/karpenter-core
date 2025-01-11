@@ -56,6 +56,16 @@ func NodeFailedToDrain(node *corev1.Node, err error) events.Event {
 	}
 }
 
+func NodeAwaitingVolumeDetachmentEvent(node *corev1.Node) events.Event {
+	return events.Event{
+		InvolvedObject: node,
+		Type:           corev1.EventTypeNormal,
+		Reason:         "AwaitingVolumeDetachment",
+		Message:        "Awaiting deletion VolumeAttachments bound to node",
+		DedupeValues:   []string{node.Name},
+	}
+}
+
 func NodeTerminationGracePeriodExpiring(node *corev1.Node, terminationTime string) events.Event {
 	return events.Event{
 		InvolvedObject: node,
