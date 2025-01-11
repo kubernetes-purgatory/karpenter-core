@@ -25,10 +25,10 @@ import (
 	"github.com/samber/lo"
 	"golang.org/x/exp/rand"
 
+	. "github.com/awslabs/operatorpkg/test/expectations"
 	"sigs.k8s.io/karpenter/pkg/apis"
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/test"
-	. "sigs.k8s.io/karpenter/pkg/test/expectations"
 	"sigs.k8s.io/karpenter/pkg/test/v1alpha1"
 	nodepoolutils "sigs.k8s.io/karpenter/pkg/utils/nodepool"
 	. "sigs.k8s.io/karpenter/pkg/utils/testing"
