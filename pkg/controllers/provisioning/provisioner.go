@@ -180,32 +180,73 @@ func (p *Provisioner) GetPendingPods(ctx context.Context) ([]*corev1.Pod, error)
 func (p *Provisioner) consolidationWarnings(ctx context.Context, pods []*corev1.Pod) {
 	// We have pending pods that have preferred anti-affinity or topology spread constraints.  These can interact
 	// unexpectedly with consolidation, so we warn once per hour when we see these pods.
-	antiAffinityPods := lo.FilterMap(pods, func(po *corev1.Pod, _ int) (client.ObjectKey, bool) {
+	antiAffinityPods := lo.FilterMap(pods, func(po *corev1.Pod, _ int) (struct {
+		key      client.ObjectKey
+		nodeName string
+	}, bool) {
 		if po.Spec.Affinity != nil && po.Spec.Affinity.PodAntiAffinity != nil {
 			if len(po.Spec.Affinity.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution) != 0 {
 				if p.cm.HasChanged(string(po.UID), "pod-antiaffinity") {
-					return client.ObjectKeyFromObject(po), true
+					return struct {
+						key      client.ObjectKey
+						nodeName string
+					}{
+						client.ObjectKeyFromObject(po),
+						po.Spec.NodeName,
+					}, true
 				}
 			}
 		}
-		return client.ObjectKey{}, false
+		return struct {
+			key      client.ObjectKey
+			nodeName string
+		}{}, false
 	})
-	topologySpreadPods := lo.FilterMap(pods, func(po *corev1.Pod, _ int) (client.ObjectKey, bool) {
+
+	topologySpreadPods := lo.FilterMap(pods, func(po *corev1.Pod, _ int) (struct {
+		key      client.ObjectKey
+		nodeName string
+	}, bool) {
 		for _, tsc := range po.Spec.TopologySpreadConstraints {
 			if tsc.WhenUnsatisfiable == corev1.ScheduleAnyway {
 				if p.cm.HasChanged(string(po.UID), "pod-topology-spread") {
-					return client.ObjectKeyFromObject(po), true
+					return struct {
+						key      client.ObjectKey
+						nodeName string
+					}{
+						client.ObjectKeyFromObject(po),
+						po.Spec.NodeName,
+					}, true
 				}
 			}
 		}
-		return client.ObjectKey{}, false
+		return struct {
+			key      client.ObjectKey
+			nodeName string
+		}{}, false
 	})
+
 	// We reduce the amount of logging that we do per-pod by grouping log lines like this together
 	if len(antiAffinityPods) > 0 {
-		log.FromContext(ctx).WithValues("pods", pretty.Slice(antiAffinityPods, 10)).Info("pod(s) have a preferred Anti-Affinity which can prevent consolidation")
+		log.FromContext(ctx).WithValues(
+			"pods", pretty.Slice(lo.Map(antiAffinityPods, func(p struct {
+				key      client.ObjectKey
+				nodeName string
+			}, _ int) string {
+				return fmt.Sprintf("%s (node: %s)", p.key.String(), p.nodeName)
+			}), 10),
+		).Info("pod(s) have a preferred Anti-Affinity which can prevent consolidation")
 	}
+
 	if len(topologySpreadPods) > 0 {
-		log.FromContext(ctx).WithValues("pods", pretty.Slice(topologySpreadPods, 10)).Info("pod(s) have a preferred TopologySpreadConstraint which can prevent consolidation")
+		log.FromContext(ctx).WithValues(
+			"pods", pretty.Slice(lo.Map(topologySpreadPods, func(p struct {
+				key      client.ObjectKey
+				nodeName string
+			}, _ int) string {
+				return fmt.Sprintf("%s (node: %s)", p.key.String(), p.nodeName)
+			}), 10),
+		).Info("pod(s) have a preferred TopologySpreadConstraint which can prevent consolidation")
 	}
 }
 
