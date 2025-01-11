@@ -42,6 +42,7 @@ import (
 	"sigs.k8s.io/karpenter/pkg/scheduling"
 	nodeclaimutils "sigs.k8s.io/karpenter/pkg/utils/nodeclaim"
 	podutils "sigs.k8s.io/karpenter/pkg/utils/pod"
+	"sigs.k8s.io/karpenter/pkg/utils/ring"
 )
 
 // Cluster maintains cluster state that is often needed but expensive to compute.
@@ -55,6 +56,7 @@ type Cluster struct {
 	nodeNameToProviderID      map[string]string               // node name -> provider id
 	nodeClaimNameToProviderID map[string]string               // node claim name -> provider id
 	daemonSetPods             sync.Map                        // daemonSet -> existing pod
+	nodePoolLaunches          map[string]*ring.Buffer         // nodePoolUID -> recent launch results
 
 	podAcks                 sync.Map // pod namespaced name -> time when Karpenter first saw the pod as pending
 	podsSchedulingAttempted sync.Map // pod namespaced name -> time when Karpenter tried to schedule a pod
@@ -81,6 +83,7 @@ func NewCluster(clk clock.Clock, client client.Client, cloudProvider cloudprovid
 		daemonSetPods:             sync.Map{},
 		nodeNameToProviderID:      map[string]string{},
 		nodeClaimNameToProviderID: map[string]string{},
+		nodePoolLaunches:          map[string]*ring.Buffer{},
 		podAcks:                   sync.Map{},
 		podsSchedulableTimes:      sync.Map{},
 		podsSchedulingAttempted:   sync.Map{},
@@ -675,4 +678,13 @@ func (c *Cluster) triggerConsolidationOnChange(old, new *StateNode) {
 		c.MarkUnconsolidated()
 		return
 	}
+}
+
+func (c *Cluster) NodePoolLaunchesFor(np string) *ring.Buffer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.nodePoolLaunches[np]; !ok {
+		c.nodePoolLaunches[np] = ring.New(10)
+	}
+	return c.nodePoolLaunches[np]
 }

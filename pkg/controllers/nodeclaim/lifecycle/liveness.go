@@ -20,31 +20,45 @@ import (
 	"context"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
+	"sigs.k8s.io/karpenter/pkg/cloudprovider"
+	"sigs.k8s.io/karpenter/pkg/controllers/state"
 	"sigs.k8s.io/karpenter/pkg/metrics"
 )
 
 type Liveness struct {
-	clock      clock.Clock
-	kubeClient client.Client
+	clock         clock.Clock
+	kubeClient    client.Client
+	cloudProvider cloudprovider.CloudProvider
+	cluster       *state.Cluster
 }
 
 // registrationTTL is a heuristic time that we expect the node to register within
 // If we don't see the node within this time, then we should delete the NodeClaim and try again
-const registrationTTL = time.Minute * 15
+const registrationTTL = 15 * time.Minute
 
+// nolint:gocyclo
 func (l *Liveness) Reconcile(ctx context.Context, nodeClaim *v1.NodeClaim) (reconcile.Result, error) {
 	registered := nodeClaim.StatusConditions().Get(v1.ConditionTypeRegistered)
-	if registered.IsTrue() {
-		return reconcile.Result{}, nil
-	}
 	if registered == nil {
 		return reconcile.Result{Requeue: true}, nil
+	}
+	nodePoolName, ok := nodeClaim.Labels[v1.NodePoolLabelKey]
+	if !ok {
+		return reconcile.Result{}, nil
+	}
+	nodePool := &v1.NodePool{}
+	if err := l.kubeClient.Get(ctx, types.NamespacedName{Name: nodePoolName}, nodePool); err != nil {
+		return reconcile.Result{}, client.IgnoreNotFound(err)
+	}
+	if registered.IsTrue() {
+		return reconcile.Result{}, nil
 	}
 	// If the Registered statusCondition hasn't gone True during the TTL since we first updated it, we should terminate the NodeClaim
 	// NOTE: ttl has to be stored and checked in the same place since l.clock can advance after the check causing a race
@@ -55,12 +69,12 @@ func (l *Liveness) Reconcile(ctx context.Context, nodeClaim *v1.NodeClaim) (reco
 	if err := l.kubeClient.Delete(ctx, nodeClaim); err != nil {
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
+	l.cluster.NodePoolLaunchesFor(string(nodePool.UID)).Push(-1)
 	log.FromContext(ctx).V(1).WithValues("ttl", registrationTTL).Info("terminating due to registration ttl")
 	metrics.NodeClaimsDisruptedTotal.Inc(map[string]string{
 		metrics.ReasonLabel:       "liveness",
 		metrics.NodePoolLabel:     nodeClaim.Labels[v1.NodePoolLabelKey],
 		metrics.CapacityTypeLabel: nodeClaim.Labels[v1.CapacityTypeLabelKey],
 	})
-
 	return reconcile.Result{}, nil
 }

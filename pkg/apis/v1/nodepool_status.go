@@ -27,6 +27,8 @@ const (
 	ConditionTypeValidationSucceeded = "ValidationSucceeded"
 	// ConditionTypeNodeClassReady = "NodeClassReady" condition indicates that underlying nodeClass was resolved and is reporting as Ready
 	ConditionTypeNodeClassReady = "NodeClassReady"
+	// TODO
+	ConditionTypeStable = "Stable"
 )
 
 // NodePoolStatus defines the observed state of NodePool

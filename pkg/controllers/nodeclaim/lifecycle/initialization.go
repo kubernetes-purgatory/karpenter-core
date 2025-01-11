@@ -23,12 +23,14 @@ import (
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
+	"sigs.k8s.io/karpenter/pkg/controllers/state"
 	"sigs.k8s.io/karpenter/pkg/scheduling"
 	nodeutils "sigs.k8s.io/karpenter/pkg/utils/node"
 	nodeclaimutils "sigs.k8s.io/karpenter/pkg/utils/nodeclaim"
@@ -37,6 +39,7 @@ import (
 
 type Initialization struct {
 	kubeClient client.Client
+	cluster    *state.Cluster
 }
 
 // Reconcile checks for initialization based on if:
@@ -83,6 +86,15 @@ func (i *Initialization) Reconcile(ctx context.Context, nodeClaim *v1.NodeClaim)
 			return reconcile.Result{}, err
 		}
 	}
+	nodePoolName, ok := nodeClaim.Labels[v1.NodePoolLabelKey]
+	if !ok {
+		return reconcile.Result{}, nil
+	}
+	nodePool := &v1.NodePool{}
+	if err := i.kubeClient.Get(ctx, types.NamespacedName{Name: nodePoolName}, nodePool); err != nil {
+		return reconcile.Result{}, client.IgnoreNotFound(err)
+	}
+	i.cluster.NodePoolLaunchesFor(string(nodePool.UID)).Push(1)
 	log.FromContext(ctx).WithValues("allocatable", node.Status.Allocatable).Info("initialized nodeclaim")
 	nodeClaim.StatusConditions().SetTrue(v1.ConditionTypeInitialized)
 	return reconcile.Result{}, nil

@@ -496,6 +496,9 @@ spec:
                       - type
                     type: object
                   type: array
+                failedlaunches:
+                  description: FailedLaunches tracks the number of times a nodepool failed before being marked degraded
+                  type: integer
                 resources:
                   additionalProperties:
                     anyOf:

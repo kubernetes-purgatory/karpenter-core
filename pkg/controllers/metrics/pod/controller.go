@@ -47,6 +47,7 @@ const (
 	ownerSelfLink       = "owner"
 	podHostName         = "node"
 	podNodePool         = "nodepool"
+	podNodePoolDegraded = "nodepool_degraded"
 	podHostZone         = "zone"
 	podHostArchitecture = "arch"
 	podHostCapacityType = "capacity_type"
@@ -106,7 +107,9 @@ var (
 			Name:      "unbound_time_seconds",
 			Help:      "The time from pod creation until the pod is bound.",
 		},
+		// []string{podName, podNamespace, podNodePoolDegraded},
 		[]string{podName, podNamespace},
+		// podNodePoolDegraded == false
 	)
 	// Stage: alpha
 	PodProvisioningBoundDurationSeconds = opmetrics.NewPrometheusHistogram(
@@ -129,6 +132,7 @@ var (
 			Name:      "provisioning_unbound_time_seconds",
 			Help:      "The time from when Karpenter first thinks the pod can schedule until it binds. Note: this calculated from a point in memory, not by the pod creation timestamp.",
 		},
+		// []string{podName, podNamespace, podNodePoolDegraded},
 		[]string{podName, podNamespace},
 	)
 	// Stage: alpha

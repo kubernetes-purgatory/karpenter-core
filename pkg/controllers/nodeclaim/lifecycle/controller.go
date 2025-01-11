@@ -41,6 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	terminatorevents "sigs.k8s.io/karpenter/pkg/controllers/node/termination/terminator/events"
+	"sigs.k8s.io/karpenter/pkg/controllers/state"
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
@@ -64,6 +65,7 @@ type Controller struct {
 	kubeClient    client.Client
 	cloudProvider cloudprovider.CloudProvider
 	recorder      events.Recorder
+	cluster       *state.Cluster
 
 	launch         *Launch
 	registration   *Registration
@@ -71,16 +73,17 @@ type Controller struct {
 	liveness       *Liveness
 }
 
-func NewController(clk clock.Clock, kubeClient client.Client, cloudProvider cloudprovider.CloudProvider, recorder events.Recorder) *Controller {
+func NewController(clk clock.Clock, kubeClient client.Client, cloudProvider cloudprovider.CloudProvider, recorder events.Recorder, cluster *state.Cluster) *Controller {
 	return &Controller{
 		kubeClient:    kubeClient,
 		cloudProvider: cloudProvider,
 		recorder:      recorder,
+		cluster:       cluster,
 
 		launch:         &Launch{kubeClient: kubeClient, cloudProvider: cloudProvider, cache: cache.New(time.Minute, time.Second*10), recorder: recorder},
 		registration:   &Registration{kubeClient: kubeClient},
-		initialization: &Initialization{kubeClient: kubeClient},
-		liveness:       &Liveness{clock: clk, kubeClient: kubeClient},
+		initialization: &Initialization{kubeClient: kubeClient, cluster: cluster},
+		liveness:       &Liveness{clock: clk, kubeClient: kubeClient, cloudProvider: cloudProvider, cluster: cluster},
 	}
 }
 
@@ -88,10 +91,8 @@ func (c *Controller) Register(_ context.Context, m manager.Manager) error {
 	return controllerruntime.NewControllerManagedBy(m).
 		Named(c.Name()).
 		For(&v1.NodeClaim{}, builder.WithPredicates(nodeclaimutils.IsManagedPredicateFuncs(c.cloudProvider))).
-		Watches(
-			&corev1.Node{},
-			nodeclaimutils.NodeEventHandler(c.kubeClient, c.cloudProvider),
-		).
+		Watches(&corev1.Node{}, nodeclaimutils.NodeEventHandler(c.kubeClient, c.cloudProvider)).
+		// Watches(&v1.NodePool{}, nodeclaimutils.NodePoolEventHandler(c.kubeClient, c.cloudProvider)).
 		WithOptions(controller.Options{
 			RateLimiter: workqueue.NewTypedMaxOfRateLimiter[reconcile.Request](
 				// back off until last attempt occurs ~90 seconds before nodeclaim expiration
