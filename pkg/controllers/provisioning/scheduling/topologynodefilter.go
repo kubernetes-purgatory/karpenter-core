@@ -51,6 +51,7 @@ func MakeTopologyNodeFilter(p *v1.Pod) TopologyNodeFilter {
 }
 
 // Matches returns true if the TopologyNodeFilter doesn't prohibit node from the participating in the topology
+// TODO: Node filter should respect nodeAffinityPolicy/nodeTaintsPolicy field in future.
 func (t TopologyNodeFilter) Matches(node *v1.Node) bool {
 	return t.MatchesRequirements(scheduling.NewLabelRequirements(node.Labels))
 }

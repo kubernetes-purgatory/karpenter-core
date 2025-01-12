@@ -65,7 +65,7 @@ func NewExistingNode(n *state.StateNode, topology *Topology, taints []v1.Taint, 
 	return node
 }
 
-func (n *ExistingNode) Add(ctx context.Context, kubeClient client.Client, pod *v1.Pod, podRequests v1.ResourceList) error {
+func (n *ExistingNode) Add(ctx context.Context, kubeClient client.Client, pod *v1.Pod, podRequests v1.ResourceList, volumeRequirements []v1.NodeSelectorRequirement) error {
 	// Check Taints
 	if err := scheduling.Taints(n.cachedTaints).Tolerates(pod); err != nil {
 		return err
@@ -116,6 +116,13 @@ func (n *ExistingNode) Add(ctx context.Context, kubeClient client.Client, pod *v
 		return err
 	}
 	nodeRequirements.Add(topologyRequirements.Values()...)
+
+	podVolumeRequirements := scheduling.NewNodeSelectorRequirements(volumeRequirements...)
+	// Check Pod Volume Requirements
+	if err = nodeRequirements.Compatible(podVolumeRequirements); err != nil {
+		return err
+	}
+	nodeRequirements.Add(podVolumeRequirements.Values()...)
 
 	// Update node
 	n.Pods = append(n.Pods, pod)

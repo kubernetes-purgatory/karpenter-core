@@ -168,7 +168,8 @@ func benchmarkScheduler(b *testing.B, instanceCount, podCount int) {
 	clock := &clock.RealClock{}
 	cluster = state.NewCluster(clock, client, cloudProvider)
 	domains := map[string]sets.Set[string]{}
-	topology, err := scheduling.NewTopology(ctx, client, cluster, domains, pods)
+	podsVolumeRequirements := make(map[*corev1.Pod][]corev1.NodeSelectorRequirement)
+	topology, err := scheduling.NewTopology(ctx, client, cluster, domains, podsVolumeRequirements)
 	if err != nil {
 		b.Fatalf("creating topology, %s", err)
 	}

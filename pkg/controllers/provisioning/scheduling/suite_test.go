@@ -3437,6 +3437,148 @@ var _ = Context("Scheduling", func() {
 				Expect(node.Name).ToNot(Equal(node2.Name))
 			})
 		})
+		Context("Pods with Zonal Volume and Topology Spread", func() {
+			var labels = map[string]string{"test": "test"}
+			var pvcs []*corev1.PersistentVolumeClaim
+			var pods []*corev1.Pod
+			var sc1 *storagev1.StorageClass
+			var sc2 *storagev1.StorageClass
+			var tsc = corev1.TopologySpreadConstraint{
+				MaxSkew:           1,
+				TopologyKey:       corev1.LabelTopologyZone,
+				WhenUnsatisfiable: corev1.DoNotSchedule,
+				LabelSelector:     &metav1.LabelSelector{MatchLabels: labels},
+			}
+			BeforeEach(func() {
+				pvcs = []*corev1.PersistentVolumeClaim{}
+				pods = []*corev1.Pod{}
+				sc1 = test.StorageClass(test.StorageClassOptions{
+					ObjectMeta: metav1.ObjectMeta{Name: "my-storage-class-1"},
+					Zones:      []string{"test-zone-1"},
+				})
+				sc2 = test.StorageClass(test.StorageClassOptions{
+					ObjectMeta: metav1.ObjectMeta{Name: "my-storage-class-2"},
+					Zones:      []string{"test-zone-2"},
+				})
+				for i := 0; i < 3; i++ {
+					// one is in test-zone-1 and others are in test-zone-2
+					scname := sc1.Name
+					if i > 0 {
+						scname = sc2.Name
+					}
+					pvc := test.PersistentVolumeClaim(test.PersistentVolumeClaimOptions{
+						ObjectMeta:       metav1.ObjectMeta{Name: fmt.Sprintf("my-claim-%d", i)},
+						StorageClassName: lo.ToPtr(scname),
+					})
+					pod := test.UnschedulablePod(test.PodOptions{
+						// to ensure one node with one pod
+						PodAntiRequirements: []corev1.PodAffinityTerm{
+							{
+								LabelSelector: &metav1.LabelSelector{MatchLabels: labels},
+								TopologyKey:   corev1.LabelHostname,
+							},
+						},
+						TopologySpreadConstraints: []corev1.TopologySpreadConstraint{tsc},
+						PersistentVolumeClaims:    []string{pvc.Name},
+						ObjectMeta:                metav1.ObjectMeta{Labels: labels},
+					})
+					pvcs = append(pvcs, pvc)
+					pods = append(pods, pod)
+				}
+			})
+			It("should launch nodes when volume zone is compatible with topology spread", func() {
+				node1 := test.Node(test.NodeOptions{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{corev1.LabelTopologyZone: "test-zone-1"},
+					},
+				})
+				node2 := test.Node(test.NodeOptions{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{corev1.LabelTopologyZone: "test-zone-2"},
+					},
+				})
+				ExpectApplied(ctx, env.Client, nodePool, sc1, sc2)
+				ExpectApplied(ctx, env.Client, pvcs[0], pvcs[1], pvcs[2])
+				ExpectApplied(ctx, env.Client, pods[0], pods[1], node1, node2)
+				ExpectManualBinding(ctx, env.Client, pods[0], node1)
+				ExpectManualBinding(ctx, env.Client, pods[1], node2)
+
+				ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, []*corev1.Node{node1, node2}, nil)
+
+				ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov, pods[2])
+				ExpectScheduled(ctx, env.Client, pods[2])
+			})
+			It("should not launch nodes when volume zone is not compatible with topology spread", func() {
+				node1 := test.Node(test.NodeOptions{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{corev1.LabelTopologyZone: "test-zone-1"},
+					},
+				})
+				node2 := test.Node(test.NodeOptions{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{corev1.LabelTopologyZone: "test-zone-2"},
+					},
+				})
+				node3 := test.Node(test.NodeOptions{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{corev1.LabelTopologyZone: "test-zone-3"},
+					},
+				})
+
+				ExpectApplied(ctx, env.Client, nodePool, sc1, sc2)
+				ExpectApplied(ctx, env.Client, pvcs[0], pvcs[1], pvcs[2])
+				ExpectApplied(ctx, env.Client, pods[0], pods[1], node1, node2, node3)
+				ExpectManualBinding(ctx, env.Client, pods[0], node1)
+				ExpectManualBinding(ctx, env.Client, pods[1], node2)
+
+				ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, []*corev1.Node{node1, node2, node3}, nil)
+
+				ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov, pods[2])
+				// for topology spread 3rd pod should be schduled to test-zone-3, but volume need be in test-zone-2
+				ExpectNotScheduled(ctx, env.Client, pods[2])
+
+			})
+			It("only nodes matching nodeAffinity/nodeSelector are included in the calculations by default", func() {
+				node1 := test.Node(test.NodeOptions{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{corev1.LabelTopologyZone: "test-zone-1", "test": "test"},
+					},
+				})
+				node2 := test.Node(test.NodeOptions{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{corev1.LabelTopologyZone: "test-zone-2", "test": "test"},
+					},
+				})
+				node3 := test.Node(test.NodeOptions{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{corev1.LabelTopologyZone: "test-zone-3"},
+					},
+				})
+				nodePool.Spec.Template.Spec.Requirements = []v1.NodeSelectorRequirementWithMinValues{
+					{
+						NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+							Key:      "test",
+							Operator: corev1.NodeSelectorOpIn,
+							Values:   []string{"test"},
+						},
+					},
+				}
+				pods[2].Spec.NodeSelector = map[string]string{"test": "test"}
+
+				ExpectApplied(ctx, env.Client, nodePool, sc1, sc2)
+				ExpectApplied(ctx, env.Client, pvcs[0], pvcs[1], pvcs[2])
+				ExpectApplied(ctx, env.Client, pods[0], pods[1], node1, node2, node3)
+				ExpectManualBinding(ctx, env.Client, pods[0], node1)
+				ExpectManualBinding(ctx, env.Client, pods[1], node2)
+
+				ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, []*corev1.Node{node1, node2, node3}, nil)
+
+				ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov, pods[2])
+				// since there is no node in test-zone-3 has label test, just test-zone-1 and test-zone-2 are included in the calculations.
+				ExpectScheduled(ctx, env.Client, pods[2])
+
+			})
+		})
 	})
 
 	Describe("Deleting Nodes", func() {

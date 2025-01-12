@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 
+	"sigs.k8s.io/karpenter/pkg/controllers/state"
 	"sigs.k8s.io/karpenter/pkg/scheduling"
 )
 
@@ -59,6 +60,7 @@ type TopologyGroup struct {
 	Type        TopologyType
 	maxSkew     int32
 	minDomains  *int32
+	cluster     *state.Cluster
 	namespaces  sets.Set[string]
 	selector    labels.Selector
 	rawSelector *metav1.LabelSelector
@@ -69,7 +71,7 @@ type TopologyGroup struct {
 	emptyDomains sets.Set[string]       // domains for which we know that no pod exists
 }
 
-func NewTopologyGroup(topologyType TopologyType, topologyKey string, pod *v1.Pod, namespaces sets.Set[string], labelSelector *metav1.LabelSelector, maxSkew int32, minDomains *int32, domains sets.Set[string]) *TopologyGroup {
+func NewTopologyGroup(topologyType TopologyType, topologyKey string, pod *v1.Pod, cluster *state.Cluster, namespaces sets.Set[string], labelSelector *metav1.LabelSelector, maxSkew int32, minDomains *int32, domains sets.Set[string]) *TopologyGroup {
 	domainCounts := map[string]int32{}
 	for domain := range domains {
 		domainCounts[domain] = 0
@@ -86,6 +88,7 @@ func NewTopologyGroup(topologyType TopologyType, topologyKey string, pod *v1.Pod
 	return &TopologyGroup{
 		Type:         topologyType,
 		Key:          topologyKey,
+		cluster:      cluster,
 		namespaces:   namespaces,
 		selector:     selector,
 		rawSelector:  labelSelector,
@@ -98,10 +101,10 @@ func NewTopologyGroup(topologyType TopologyType, topologyKey string, pod *v1.Pod
 	}
 }
 
-func (t *TopologyGroup) Get(pod *v1.Pod, podDomains, nodeDomains *scheduling.Requirement) *scheduling.Requirement {
+func (t *TopologyGroup) Get(pod *v1.Pod, podDomains, nodeDomains *scheduling.Requirement, hasVolumeRequirements bool) *scheduling.Requirement {
 	switch t.Type {
 	case TopologyTypeSpread:
-		return t.nextDomainTopologySpread(pod, podDomains, nodeDomains)
+		return t.nextDomainTopologySpread(pod, podDomains, nodeDomains, hasVolumeRequirements)
 	case TopologyTypePodAffinity:
 		return t.nextDomainAffinity(pod, podDomains, nodeDomains)
 	case TopologyTypePodAntiAffinity:
@@ -178,9 +181,47 @@ func (t *TopologyGroup) Hash() uint64 {
 // If there are multiple eligible domains, we return any random domain that satisfies the `maxSkew` configuration.
 // If there are no eligible domains, we return a `DoesNotExist` requirement, implying that we could not satisfy the topologySpread requirement.
 // nolint:gocyclo
-func (t *TopologyGroup) nextDomainTopologySpread(pod *v1.Pod, podDomains, nodeDomains *scheduling.Requirement) *scheduling.Requirement {
+func (t *TopologyGroup) nextDomainTopologySpread(pod *v1.Pod, podDomains, nodeDomains *scheduling.Requirement, hasVolumeRequirement bool) *scheduling.Requirement {
+	var nodes = make(map[string][]*v1.Node)
+	var blockedDomains = sets.New[string]()
+	var candidateDomains = []string{}
+	var firstDomains = []string{}
+
+	if t.cluster != nil {
+		for _, node := range t.cluster.Nodes() {
+			if node == nil || node.Node == nil {
+				continue
+			}
+			if _, ok := node.Node.GetLabels()[t.Key]; !ok {
+				continue
+			}
+			nodes[node.Node.GetLabels()[t.Key]] = append(nodes[node.Node.GetLabels()[t.Key]], node.Node)
+		}
+	}
+	// some empty domains, which all existing nodes with them don't match the pod, should not be in the calculations.
+	for _, domain := range t.emptyDomains.UnsortedList() {
+		// no existing node has this domain, so this domain is in nodeclaim and may will be created first time.
+		if len(nodes[domain]) == 0 {
+			// if we have volume requirement, we should block the first time domain, since it's skew is always 0 which may break the skew caculations.
+			if hasVolumeRequirement {
+				firstDomains = append(firstDomains, domain)
+			} else {
+				continue
+			}
+		}
+		var needBlock = true
+		for _, node := range nodes[domain] {
+			if node.GetLabels()[t.Key] == domain && t.nodeFilter.Matches(node) {
+				needBlock = false
+				break
+			}
+		}
+		if needBlock {
+			blockedDomains.Insert(domain)
+		}
+	}
 	// min count is calculated across all domains
-	min := t.domainMinCount(podDomains)
+	min := t.domainMinCount(podDomains, blockedDomains)
 	selfSelecting := t.selects(pod)
 
 	minDomain := ""
@@ -192,41 +233,51 @@ func (t *TopologyGroup) nextDomainTopologySpread(pod *v1.Pod, podDomains, nodeDo
 	// lot of t.domains but only a single nodeDomain
 	if nodeDomains.Operator() == v1.NodeSelectorOpIn {
 		for _, domain := range nodeDomains.Values() {
-			if count, ok := t.domains[domain]; ok {
+			if count, ok := t.domains[domain]; ok && !blockedDomains.Has(domain) {
 				if selfSelecting {
 					count++
 				}
-				if count-min <= t.maxSkew && count < minCount {
-					minDomain = domain
-					minCount = count
+				if count-min <= t.maxSkew {
+					candidateDomains = append(candidateDomains, domain)
+					if count < minCount {
+						minDomain = domain
+						minCount = count
+					}
 				}
 			}
 		}
 	} else {
 		for domain := range t.domains {
 			// but we can only choose from the node domains
-			if nodeDomains.Has(domain) {
+			if nodeDomains.Has(domain) && !blockedDomains.Has(domain) {
 				// comment from kube-scheduler regarding the viable choices to schedule to based on skew is:
 				// 'existing matching num' + 'if self-match (1 or 0)' - 'global min matching num' <= 'maxSkew'
 				count := t.domains[domain]
 				if selfSelecting {
 					count++
 				}
-				if count-min <= t.maxSkew && count < minCount {
-					minDomain = domain
-					minCount = count
+				if count-min <= t.maxSkew {
+					candidateDomains = append(candidateDomains, domain)
+					if count < minCount {
+						minDomain = domain
+						minCount = count
+					}
 				}
 			}
 		}
 	}
-	if minDomain == "" {
+	if minDomain == "" && len(firstDomains) == 0 {
 		// avoids an error message about 'zone in [""]', preferring 'zone in []'
 		return scheduling.NewRequirement(podDomains.Key, v1.NodeSelectorOpDoesNotExist)
+	}
+	// we should pop all candidate domains for volume requirments
+	if hasVolumeRequirement {
+		return scheduling.NewRequirement(podDomains.Key, v1.NodeSelectorOpIn, append(firstDomains, candidateDomains...)...)
 	}
 	return scheduling.NewRequirement(podDomains.Key, v1.NodeSelectorOpIn, minDomain)
 }
 
-func (t *TopologyGroup) domainMinCount(domains *scheduling.Requirement) int32 {
+func (t *TopologyGroup) domainMinCount(domains *scheduling.Requirement, blockedDomains sets.Set[string]) int32 {
 	// hostname based topologies always have a min pod count of zero since we can create one
 	if t.Key == v1.LabelHostname {
 		return 0
@@ -236,7 +287,7 @@ func (t *TopologyGroup) domainMinCount(domains *scheduling.Requirement) int32 {
 	var numPodSupportedDomains int32
 	// determine our current min count
 	for domain, count := range t.domains {
-		if domains.Has(domain) {
+		if domains.Has(domain) && !blockedDomains.Has(domain) {
 			numPodSupportedDomains++
 			if count < min {
 				min = count

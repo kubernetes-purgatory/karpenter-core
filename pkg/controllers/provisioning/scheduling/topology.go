@@ -54,28 +54,32 @@ type Topology struct {
 	// excludedPods are the pod UIDs of pods that are excluded from counting.  This is used so we can simulate
 	// moving pods to prevent them from being double counted.
 	excludedPods sets.Set[string]
-	cluster      *state.Cluster
+	// podVolumeRequirements links volume requirements to pods. This is used so we
+	// can track the volume requirements in simulate scheduler
+	podVolumeRequirements map[*corev1.Pod][]corev1.NodeSelectorRequirement
+	cluster               *state.Cluster
 }
 
-func NewTopology(ctx context.Context, kubeClient client.Client, cluster *state.Cluster, domains map[string]sets.Set[string], pods []*corev1.Pod) (*Topology, error) {
+func NewTopology(ctx context.Context, kubeClient client.Client, cluster *state.Cluster, domains map[string]sets.Set[string], podsVolumeRequirements map[*corev1.Pod][]corev1.NodeSelectorRequirement) (*Topology, error) {
 	t := &Topology{
-		kubeClient:        kubeClient,
-		cluster:           cluster,
-		domains:           domains,
-		topologies:        map[uint64]*TopologyGroup{},
-		inverseTopologies: map[uint64]*TopologyGroup{},
-		excludedPods:      sets.New[string](),
+		kubeClient:            kubeClient,
+		cluster:               cluster,
+		domains:               domains,
+		topologies:            map[uint64]*TopologyGroup{},
+		inverseTopologies:     map[uint64]*TopologyGroup{},
+		excludedPods:          sets.New[string](),
+		podVolumeRequirements: podsVolumeRequirements,
 	}
 
 	// these are the pods that we intend to schedule, so if they are currently in the cluster we shouldn't count them for
 	// topology purposes
-	for _, p := range pods {
+	for p := range podsVolumeRequirements {
 		t.excludedPods.Insert(string(p.UID))
 	}
 
 	errs := t.updateInverseAffinities(ctx)
-	for i := range pods {
-		errs = multierr.Append(errs, t.Update(ctx, pods[i]))
+	for p := range podsVolumeRequirements {
+		errs = multierr.Append(errs, t.Update(ctx, p))
 	}
 	if errs != nil {
 		return nil, errs
@@ -174,7 +178,7 @@ func (t *Topology) AddRequirements(podRequirements, nodeRequirements scheduling.
 		if nodeRequirements.Has(topology.Key) {
 			nodeDomains = nodeRequirements.Get(topology.Key)
 		}
-		domains := topology.Get(p, podDomains, nodeDomains)
+		domains := topology.Get(p, podDomains, nodeDomains, len(t.podVolumeRequirements[p]) != 0)
 		if domains.Len() == 0 {
 			return nil, topologyError{
 				topology:    topology,
@@ -245,7 +249,7 @@ func (t *Topology) updateInverseAntiAffinity(ctx context.Context, pod *corev1.Po
 			return err
 		}
 
-		tg := NewTopologyGroup(TopologyTypePodAntiAffinity, term.TopologyKey, pod, namespaces, term.LabelSelector, math.MaxInt32, nil, t.domains[term.TopologyKey])
+		tg := NewTopologyGroup(TopologyTypePodAntiAffinity, term.TopologyKey, pod, t.cluster, namespaces, term.LabelSelector, math.MaxInt32, nil, t.domains[term.TopologyKey])
 
 		hash := tg.Hash()
 		if existing, ok := t.inverseTopologies[hash]; !ok {
@@ -323,7 +327,7 @@ func (t *Topology) countDomains(ctx context.Context, tg *TopologyGroup) error {
 func (t *Topology) newForTopologies(p *corev1.Pod) []*TopologyGroup {
 	var topologyGroups []*TopologyGroup
 	for _, cs := range p.Spec.TopologySpreadConstraints {
-		topologyGroups = append(topologyGroups, NewTopologyGroup(TopologyTypeSpread, cs.TopologyKey, p, sets.New(p.Namespace), cs.LabelSelector, cs.MaxSkew, cs.MinDomains, t.domains[cs.TopologyKey]))
+		topologyGroups = append(topologyGroups, NewTopologyGroup(TopologyTypeSpread, cs.TopologyKey, p, t.cluster, sets.New(p.Namespace), cs.LabelSelector, cs.MaxSkew, cs.MinDomains, t.domains[cs.TopologyKey]))
 	}
 	return topologyGroups
 }
@@ -360,7 +364,7 @@ func (t *Topology) newForAffinities(ctx context.Context, p *corev1.Pod) ([]*Topo
 			if err != nil {
 				return nil, err
 			}
-			topologyGroups = append(topologyGroups, NewTopologyGroup(topologyType, term.TopologyKey, p, namespaces, term.LabelSelector, math.MaxInt32, nil, t.domains[term.TopologyKey]))
+			topologyGroups = append(topologyGroups, NewTopologyGroup(topologyType, term.TopologyKey, p, t.cluster, namespaces, term.LabelSelector, math.MaxInt32, nil, t.domains[term.TopologyKey]))
 		}
 	}
 	return topologyGroups, nil
