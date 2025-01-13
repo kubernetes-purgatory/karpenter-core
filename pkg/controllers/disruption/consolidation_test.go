@@ -2050,9 +2050,9 @@ var _ = Describe("Consolidation", func() {
 				Name: "current-on-demand",
 				Offerings: []cloudprovider.Offering{
 					{
-						Requirements: scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeOnDemand, corev1.LabelTopologyZone: "test-zone-1a"}),
-						Price:        0.5,
-						Available:    false,
+						OfferingAvailabilityResolver: cloudprovider.FalseStaticAvailabilityResolver,
+						Requirements:                 scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeOnDemand, corev1.LabelTopologyZone: "test-zone-1a"}),
+						Price:                        0.5,
 					},
 				},
 			})
@@ -2060,19 +2060,19 @@ var _ = Describe("Consolidation", func() {
 				Name: "potential-spot-replacement",
 				Offerings: []cloudprovider.Offering{
 					{
-						Requirements: scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeSpot, corev1.LabelTopologyZone: "test-zone-1a"}),
-						Price:        1.0,
-						Available:    true,
+						OfferingAvailabilityResolver: cloudprovider.TrueStaticAvailabilityResolver,
+						Requirements:                 scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeSpot, corev1.LabelTopologyZone: "test-zone-1a"}),
+						Price:                        1.0,
 					},
 					{
-						Requirements: scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeSpot, corev1.LabelTopologyZone: "test-zone-1b"}),
-						Price:        0.2,
-						Available:    true,
+						OfferingAvailabilityResolver: cloudprovider.TrueStaticAvailabilityResolver,
+						Requirements:                 scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeSpot, corev1.LabelTopologyZone: "test-zone-1b"}),
+						Price:                        0.2,
 					},
 					{
-						Requirements: scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeSpot, corev1.LabelTopologyZone: "test-zone-1c"}),
-						Price:        0.4,
-						Available:    true,
+						OfferingAvailabilityResolver: cloudprovider.TrueStaticAvailabilityResolver,
+						Requirements:                 scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeSpot, corev1.LabelTopologyZone: "test-zone-1c"}),
+						Price:                        0.4,
 					},
 				},
 			})
@@ -2134,9 +2134,9 @@ var _ = Describe("Consolidation", func() {
 				Name: "current-on-demand",
 				Offerings: []cloudprovider.Offering{
 					{
-						Requirements: scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeOnDemand, corev1.LabelTopologyZone: "test-zone-1a"}),
-						Price:        0.5,
-						Available:    false,
+						OfferingAvailabilityResolver: cloudprovider.FalseStaticAvailabilityResolver,
+						Requirements:                 scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeOnDemand, corev1.LabelTopologyZone: "test-zone-1a"}),
+						Price:                        0.5,
 					},
 				},
 			})
@@ -2144,24 +2144,24 @@ var _ = Describe("Consolidation", func() {
 				Name: "on-demand-replacement",
 				Offerings: []cloudprovider.Offering{
 					{
-						Requirements: scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeOnDemand, corev1.LabelTopologyZone: "test-zone-1a"}),
-						Price:        0.6,
-						Available:    true,
+						OfferingAvailabilityResolver: cloudprovider.TrueStaticAvailabilityResolver,
+						Requirements:                 scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeOnDemand, corev1.LabelTopologyZone: "test-zone-1a"}),
+						Price:                        0.6,
 					},
 					{
-						Requirements: scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeOnDemand, corev1.LabelTopologyZone: "test-zone-1b"}),
-						Price:        0.6,
-						Available:    true,
+						OfferingAvailabilityResolver: cloudprovider.TrueStaticAvailabilityResolver,
+						Requirements:                 scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeOnDemand, corev1.LabelTopologyZone: "test-zone-1b"}),
+						Price:                        0.6,
 					},
 					{
-						Requirements: scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeSpot, corev1.LabelTopologyZone: "test-zone-1b"}),
-						Price:        0.2,
-						Available:    true,
+						OfferingAvailabilityResolver: cloudprovider.TrueStaticAvailabilityResolver,
+						Requirements:                 scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeSpot, corev1.LabelTopologyZone: "test-zone-1b"}),
+						Price:                        0.2,
 					},
 					{
-						Requirements: scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeSpot, corev1.LabelTopologyZone: "test-zone-1c"}),
-						Price:        0.3,
-						Available:    true,
+						OfferingAvailabilityResolver: cloudprovider.TrueStaticAvailabilityResolver,
+						Requirements:                 scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeSpot, corev1.LabelTopologyZone: "test-zone-1c"}),
+						Price:                        0.3,
 					},
 				},
 			})

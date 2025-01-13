@@ -17,6 +17,7 @@ limitations under the License.
 package scheduling
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -24,7 +25,9 @@ import (
 	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/klog/v2"
 
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 	"sigs.k8s.io/karpenter/pkg/scheduling"
 	"sigs.k8s.io/karpenter/pkg/utils/resources"
@@ -36,15 +39,52 @@ type NodeClaim struct {
 	NodeClaimTemplate
 
 	Pods            []*v1.Pod
+	Reservations    []cloudprovider.OfferingReservation
 	topology        *Topology
 	hostPortUsage   *scheduling.HostPortUsage
 	daemonResources v1.ResourceList
 	hostname        string
 }
 
+type NodePoolLimitsExceededError struct {
+	nodePool string
+}
+
+func (e NodePoolLimitsExceededError) Error() string {
+	return fmt.Sprintf("all avaialble instance types exceed limits for nodepool: %q", e.nodePool)
+}
+
+type IncompatibleNodeClaimTemplateError struct {
+	nodePool          string
+	daemonSetOverhead v1.ResourceList
+}
+
 var nodeID int64
 
-func NewNodeClaim(nodeClaimTemplate *NodeClaimTemplate, topology *Topology, daemonResources v1.ResourceList, instanceTypes []*cloudprovider.InstanceType) *NodeClaim {
+func NewNodeClaimForPod(
+	ctx context.Context,
+	nodeClaimTemplate *NodeClaimTemplate,
+	topology *Topology,
+	daemonResources v1.ResourceList,
+	remainingResources v1.ResourceList,
+	// instanceTypes []*cloudprovider.InstanceType,
+	pod *v1.Pod,
+	podRequests v1.ResourceList,
+) (*NodeClaim, error) {
+	// Ensure we don't consider instance types which would exceed the limits of the NodePool
+	instanceTypes := filterByRemainingResources(nodeClaimTemplate.InstanceTypeOptions, remainingResources)
+	if len(instanceTypes) == 0 {
+		return nil, NodePoolLimitsExceededError{nodePool: nodeClaimTemplate.NodePoolName}
+	} else if len(nodeClaimTemplate.InstanceTypeOptions) != len(instanceTypes) {
+		log.FromContext(ctx).V(1).WithValues(
+			"NodePool", klog.KRef("", nodeClaimTemplate.NodePoolName),
+		).Info(fmt.Sprintf(
+			"%d out of %d instance types were excluded because they would breach limits",
+			len(nodeClaimTemplate.InstanceTypeOptions)-len(instanceTypes),
+			len(nodeClaimTemplate.InstanceTypeOptions),
+		))
+	}
+
 	// Copy the template, and add hostname
 	hostname := fmt.Sprintf("hostname-placeholder-%04d", atomic.AddInt64(&nodeID, 1))
 	topology.Register(v1.LabelHostname, hostname)
@@ -54,14 +94,22 @@ func NewNodeClaim(nodeClaimTemplate *NodeClaimTemplate, topology *Topology, daem
 	template.Requirements.Add(scheduling.NewRequirement(v1.LabelHostname, v1.NodeSelectorOpIn, hostname))
 	template.InstanceTypeOptions = instanceTypes
 	template.Spec.Resources.Requests = daemonResources
-
-	return &NodeClaim{
+	nodeClaim := &NodeClaim{
 		NodeClaimTemplate: template,
 		hostPortUsage:     scheduling.NewHostPortUsage(),
 		topology:          topology,
 		daemonResources:   daemonResources,
 		hostname:          hostname,
 	}
+	if err := nodeClaim.Add(pod, podRequests); err != nil {
+		return nil, fmt.Errorf(
+			"incomptible with nodepool %q, daemonset overhead=%s, %w",
+			nodeClaimTemplate.NodePoolName,
+			daemonResources,
+			err,
+		)
+	}
+	return nodeClaim, nil
 }
 
 func (n *NodeClaim) Add(pod *v1.Pod, podRequests v1.ResourceList) error {
@@ -104,11 +152,20 @@ func (n *NodeClaim) Add(pod *v1.Pod, podRequests v1.ResourceList) error {
 	requests := resources.Merge(n.Spec.Resources.Requests, podRequests)
 
 	filtered := filterInstanceTypesByRequirements(n.InstanceTypeOptions, nodeClaimRequirements, requests)
-
-	if len(filtered.remaining) == 0 {
+	if reserved := lo.Filter(filtered.remaining, func(it *cloudprovider.InstanceType, _ int) bool {
+		return it.Offerings.Reserve(n.hostname)
+	}); len(reserved) == 0 {
+		if len(filtered.remaining) != 0 {
+			filtered.hasOffering = false
+		}
 		// log the total resources being requested (daemonset + the pod)
 		cumulativeResources := resources.Merge(n.daemonResources, podRequests)
 		return fmt.Errorf("no instance type satisfied resources %s and requirements %s (%s)", resources.String(cumulativeResources), nodeClaimRequirements, filtered.FailureReason())
+	}
+	// Release the reservations for all Offerings which are no longer candidates for this instance.
+	// Note: this is a no-op for the initial NodeClaim creation since no reservations have yet been made.
+	for _, it := range filtered.removed {
+		it.Offerings.Reservations(n.hostname).Release()
 	}
 
 	// Update node
@@ -123,6 +180,10 @@ func (n *NodeClaim) Add(pod *v1.Pod, podRequests v1.ResourceList) error {
 
 func (n *NodeClaim) Destroy() {
 	n.topology.Unregister(v1.LabelHostname, n.hostname)
+	// TODO: validate if this is necesssary (it shouldn't be)
+	for _, it := range n.InstanceTypeOptions {
+		it.Offerings.Reservations(n.hostname).Release()
+	}
 }
 
 // FinalizeScheduling is called once all scheduling has completed and allows the node to perform any cleanup
@@ -161,6 +222,7 @@ func InstanceTypeList(instanceTypeOptions []*cloudprovider.InstanceType) string 
 
 type filterResults struct {
 	remaining cloudprovider.InstanceTypes
+	removed   cloudprovider.InstanceTypes
 	// Each of these three flags indicates if that particular criteria was met by at least one instance type
 	requirementsMet bool
 	fits            bool
@@ -278,6 +340,8 @@ func filterInstanceTypesByRequirements(instanceTypes []*cloudprovider.InstanceTy
 		// any errors.
 		if itCompat && itFits && itHasOffering {
 			results.remaining = append(results.remaining, it)
+		} else {
+			results.removed = append(results.removed, it)
 		}
 	}
 

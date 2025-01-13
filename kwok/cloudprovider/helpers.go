@@ -147,7 +147,7 @@ func setDefaultOptions(opts InstanceTypeOptions) InstanceTypeOptions {
 
 	// make sure all the instance types are available
 	for i := range opts.Offerings {
-		opts.Offerings[i].Available = true
+		opts.Offerings[i].OfferingAvailabilityResolver = cloudprovider.TrueStaticAvailabilityResolver
 	}
 
 	return opts
@@ -186,11 +186,11 @@ func newInstanceType(options InstanceTypeOptions) *cloudprovider.InstanceType {
 		Requirements: requirements,
 		Offerings: lo.Map(options.Offerings, func(off KWOKOffering, _ int) cloudprovider.Offering {
 			return cloudprovider.Offering{
+				OfferingAvailabilityResolver: off.Offering.OfferingAvailabilityResolver,
 				Requirements: scheduling.NewRequirements(lo.Map(off.Requirements, func(req corev1.NodeSelectorRequirement, _ int) *scheduling.Requirement {
 					return scheduling.NewRequirement(req.Key, req.Operator, req.Values...)
 				})...),
 				Price:     off.Offering.Price,
-				Available: off.Offering.Available,
 			}
 		}),
 		Capacity: options.Resources,

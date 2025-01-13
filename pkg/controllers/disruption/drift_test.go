@@ -775,9 +775,9 @@ var _ = Describe("Drift", func() {
 				Name: "current-on-demand",
 				Offerings: []cloudprovider.Offering{
 					{
-						Requirements: scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeOnDemand, corev1.LabelTopologyZone: "test-zone-1a"}),
-						Price:        0.5,
-						Available:    false,
+						OfferingAvailabilityResolver: cloudprovider.FalseStaticAvailabilityResolver,
+						Requirements:                 scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeOnDemand, corev1.LabelTopologyZone: "test-zone-1a"}),
+						Price:                        0.5,
 					},
 				},
 			})
@@ -785,9 +785,9 @@ var _ = Describe("Drift", func() {
 				Name: "replacement-on-demand",
 				Offerings: []cloudprovider.Offering{
 					{
-						Requirements: scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeOnDemand, corev1.LabelTopologyZone: "test-zone-1a"}),
-						Price:        0.3,
-						Available:    true,
+						OfferingAvailabilityResolver: cloudprovider.TrueStaticAvailabilityResolver,
+						Requirements:                 scheduling.NewLabelRequirements(map[string]string{v1.CapacityTypeLabelKey: v1.CapacityTypeOnDemand, corev1.LabelTopologyZone: "test-zone-1a"}),
+						Price:                        0.3,
 					},
 				},
 				Resources: map[corev1.ResourceName]resource.Quantity{corev1.ResourceCPU: resource.MustParse("3")},
