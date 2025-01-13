@@ -303,13 +303,29 @@ func (r Requirements) Intersects(requirements Requirements) (errs error) {
 	return errs
 }
 
+// Labels filters out labels from the requirements that are not allowed to be synced centrally by Karpenter to the Node.
 func (r Requirements) Labels() map[string]string {
 	labels := map[string]string{}
 	for key, requirement := range r {
-		if !v1.IsRestrictedNodeLabel(key) {
-			if value := requirement.Any(); value != "" {
-				labels[key] = value
-			}
+		if !v1.IsValidToSyncCentrallyLabel(key) {
+			continue
+		}
+		if value := requirement.Any(); value != "" {
+			labels[key] = value
+		}
+	}
+	return labels
+}
+
+// KubeletLabels filters out labels from the requirements that will be rejected by the node restriction admission.
+func (r Requirements) KubeletLabels() map[string]string {
+	labels := map[string]string{}
+	for key, requirement := range r {
+		if !v1.IsKubeletLabel(key) {
+			continue
+		}
+		if value := requirement.Any(); value != "" {
+			labels[key] = value
 		}
 	}
 	return labels
