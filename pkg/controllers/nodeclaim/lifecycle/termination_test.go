@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"sigs.k8s.io/karpenter/pkg/apis"
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider/fake"
@@ -300,7 +301,8 @@ var _ = Describe("Termination", func() {
 		ExpectExists(ctx, env.Client, node)
 		nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
 
-		Expect(nodeClaim.ObjectMeta.Annotations).To(BeNil())
+		Expect(nodeClaim.ObjectMeta.Annotations).To(HaveLen(1))
+		Expect(nodeClaim.ObjectMeta.Annotations).To(HaveKey(apis.Group + "/node-restricted-labels"))
 	})
 	It("should annotate the node if the NodeClaim has a terminationGracePeriod", func() {
 		nodeClaim.Spec.TerminationGracePeriod = &metav1.Duration{Duration: time.Second * 300}
@@ -348,9 +350,8 @@ var _ = Describe("Termination", func() {
 		ExpectExists(ctx, env.Client, node)
 		nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
 
-		Expect(nodeClaim.ObjectMeta.Annotations).To(Equal(map[string]string{
-			v1.NodeClaimTerminationTimestampAnnotationKey: "2024-04-01T12:00:00-05:00",
-		}))
+		Expect(nodeClaim.ObjectMeta.Annotations).To(HaveKeyWithValue(
+			v1.NodeClaimTerminationTimestampAnnotationKey, "2024-04-01T12:00:00-05:00"))
 	})
 	It("should not delete Nodes if the NodeClaim is not registered", func() {
 		ExpectApplied(ctx, env.Client, nodePool, nodeClaim)

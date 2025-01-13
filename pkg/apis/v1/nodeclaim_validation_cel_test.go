@@ -141,9 +141,9 @@ var _ = Describe("Validation", func() {
 				Expect(env.Client.Create(ctx, nodeClaim)).ToNot(Succeed())
 			}
 		})
-		It("should allow restricted domains exceptions", func() {
+		It("should allow kubernetes domains", func() {
 			oldNodeClaim := nodeClaim.DeepCopy()
-			for label := range LabelDomainExceptions {
+			for label := range K8sLabelDomains {
 				nodeClaim.Spec.Requirements = []NodeSelectorRequirementWithMinValues{
 					{NodeSelectorRequirement: v1.NodeSelectorRequirement{Key: label + "/test", Operator: v1.NodeSelectorOpIn, Values: []string{"test"}}},
 				}
@@ -152,9 +152,9 @@ var _ = Describe("Validation", func() {
 				nodeClaim = oldNodeClaim.DeepCopy()
 			}
 		})
-		It("should allow restricted subdomains exceptions", func() {
+		It("should allow kubernetes subdomains", func() {
 			oldNodeClaim := nodeClaim.DeepCopy()
-			for label := range LabelDomainExceptions {
+			for label := range K8sLabelDomains {
 				nodeClaim.Spec.Requirements = []NodeSelectorRequirementWithMinValues{
 					{NodeSelectorRequirement: v1.NodeSelectorRequirement{Key: "subdomain." + label + "/test", Operator: v1.NodeSelectorOpIn, Values: []string{"test"}}},
 				}

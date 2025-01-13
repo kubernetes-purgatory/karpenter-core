@@ -1236,8 +1236,8 @@ var _ = Describe("Provisioning", func() {
 			Expect(node.Labels).To(HaveKey("test-key-6"))
 			Expect(node.Labels).ToNot(HaveKey("test-key-7"))
 		})
-		It("should label nodes with labels in the LabelDomainExceptions list", func() {
-			for domain := range v1.LabelDomainExceptions {
+		It("should label nodes with labels in the kubernetes domains", func() {
+			for domain := range v1.K8sLabelDomains {
 				nodePool := test.NodePool(v1.NodePool{
 					Spec: v1.NodePoolSpec{
 						Template: v1.NodeClaimTemplate{
@@ -1258,8 +1258,8 @@ var _ = Describe("Provisioning", func() {
 				Expect(node.Labels).To(HaveKeyWithValue(domain+"/test", "test-value"))
 			}
 		})
-		It("should label nodes with labels in the subdomain from LabelDomainExceptions list", func() {
-			for domain := range v1.LabelDomainExceptions {
+		It("should label nodes with labels in the subdomain from kubernetes domains", func() {
+			for domain := range v1.K8sLabelDomains {
 				nodePool := test.NodePool(v1.NodePool{
 					Spec: v1.NodePoolSpec{
 						Template: v1.NodeClaimTemplate{
